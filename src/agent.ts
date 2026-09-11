@@ -267,25 +267,25 @@ export function applyAnalysis(
   fresh: Record<string, Analysis>,
   t = Date.now(),
 ) {
-  const before = JSON.stringify(s.analysis);
+  const antes = Object.fromEntries(
+    Object.entries(s.analysis).map(([k, a]) => [k, a.barsDiscarded]),
+  );
   const kept: Record<string, Analysis> = {};
   for (const symbol of s.settings.symbols) {
     const next = fresh[symbol] ?? s.analysis[symbol];
     if (next) kept[symbol] = next;
   }
   s.analysis = kept;
-  if (before !== JSON.stringify(s.analysis)) {
-    const discarded = Object.values(fresh).reduce(
-      (a, x) => a + x.barsDiscarded,
-      0,
-    );
-    if (discarded)
+  // El análisis se recalcula cada pocos minutos y casi siempre cambia, porque
+  // cambia el precio. Solo es noticia que el proveedor empiece a mandar velas
+  // imposibles, no que se haya recalculado.
+  for (const [symbol, a] of Object.entries(kept))
+    if (a.barsDiscarded > 0 && a.barsDiscarded !== antes[symbol])
       log(
         s,
         "market",
-        `Analisis actualizado. Se descartaron ${discarded} velas con datos imposibles.`,
+        `${symbol}: ${a.barsDiscarded} ${a.barsDiscarded === 1 ? "sesión descartada" : "sesiones descartadas"} porque el proveedor las dio con datos imposibles.`,
       );
-  }
   void t;
 }
 

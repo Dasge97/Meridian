@@ -309,11 +309,24 @@ async function newsStep() {
   await change((s) => applyNews(s, raw));
 }
 async function loop(name: string, step: () => Promise<void>, waitMs: number) {
+  let ultimoFallo = "";
   while (!stopping) {
     try {
       await step();
-    } catch {
-      console.error(`Worker ${name} failed`);
+      ultimoFallo = "";
+    } catch (e) {
+      // Sin el motivo no hay forma de saber qué bucle se rompió ni por qué. Se
+      // registra el primero de una racha, no los de cada vuelta.
+      const motivo = describeFailure(e);
+      console.error(`Worker ${name}: ${motivo}`);
+      if (motivo !== ultimoFallo) {
+        ultimoFallo = motivo;
+        try {
+          await change((s) => log(s, "error", `Fallo en ${name}: ${motivo}`));
+        } catch {
+          console.error(`Worker ${name}: tampoco se pudo registrar el fallo`);
+        }
+      }
     }
     await new Promise((r) => setTimeout(r, waitMs));
   }
