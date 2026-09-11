@@ -13,7 +13,7 @@ import {
 } from "./domain.ts";
 import type { z } from "zod";
 import type { Analysis } from "./market.ts";
-import { mergeStories, summarise } from "./news.ts";
+import { mergeStories, summarise, pendingRefs } from "./news.ts";
 // Worker state transitions, kept free of I/O so they can be tested directly.
 export type Job = {
   meta: NonNullable<State["modelJob"]>;
@@ -221,9 +221,18 @@ export function applyDecision(
       createdAt: new Date(t).toISOString(),
       decisionId: d.id,
     });
-  // Una noticia comentada no se vuelve a comentar en la siguiente evaluación.
-  const comentadas = new Set((p.newsComments ?? []).map((c) => c.id));
-  for (const n of s.stories) if (comentadas.has(n.id)) n.commented = true;
+  // Las referencias se resuelven contra la misma lista que el agente tuvo
+  // delante, no contra la de ahora: entre medias pueden haber llegado noticias.
+  const vistas = pendingRefs(job.state.stories ?? []);
+  d.newsCommented = [];
+  for (const c of p.newsComments ?? []) {
+    const vista = vistas.get(c.ref);
+    if (!vista) continue;
+    const n = s.stories.find((x) => x.id === vista.id);
+    if (!n || n.commented) continue;
+    n.commented = true;
+    d.newsCommented.push({ storyId: n.id, comment: c.comment });
+  }
   s.modelJob = null;
   log(s, "decision", `${p.action}: ${p.reason.slice(0, 200)}`);
   return d;

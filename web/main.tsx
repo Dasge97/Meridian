@@ -681,28 +681,45 @@ function App() {
                   busca cada media hora.
                 </Empty>
               ) : (
-                [...(s.stories || [])].reverse().map((n) => (
-                  <div className="event" key={n.id}>
-                    <p>
-                      <strong>{n.headline}</strong>
-                      <br />
-                      {n.summary && <span className="muted">{n.summary}</span>}
-                      <br />
-                      <small>
-                        {n.symbols.join(", ")} · {n.source}
-                        {n.url && (
+                [...(s.stories || [])].reverse().map((n) => {
+                  const comentario = [...s.decisions]
+                    .reverse()
+                    .flatMap((d) => d.newsCommented ?? [])
+                    .find((c) => c.storyId === n.id);
+                  return (
+                    <div className="event" key={n.id}>
+                      <p>
+                        <strong>{n.headline}</strong>
+                        <br />
+                        {comentario && (
                           <>
-                            {" · "}
-                            <a href={n.url} target="_blank" rel="noreferrer">
-                              leer ↗
-                            </a>
+                            <span className="preserve">
+                              <b>Lo que opina: </b>
+                              {comentario.comment}
+                            </span>
+                            <br />
                           </>
                         )}
-                      </small>
-                    </p>
-                    <time>{date(n.at)}</time>
-                  </div>
-                ))
+                        {n.summary && (
+                          <span className="muted">{n.summary}</span>
+                        )}
+                        <br />
+                        <small>
+                          {n.symbols.join(", ")} · {n.source}
+                          {n.url && (
+                            <>
+                              {" · "}
+                              <a href={n.url} target="_blank" rel="noreferrer">
+                                leer ↗
+                              </a>
+                            </>
+                          )}
+                        </small>
+                      </p>
+                      <time>{date(n.at)}</time>
+                    </div>
+                  );
+                })
               )}
             </section>
           )}

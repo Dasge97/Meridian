@@ -150,11 +150,11 @@ export function problemNotice(mensaje: string): Notice {
 // Los comentarios del agente sobre las noticias que acaba de leer. Va aparte del
 // aviso de la decisión: al propietario le interesa aunque no se opere nada.
 export function newsNotice(s: State, d: Decision): Notice | null {
-  const comentarios = d.proposal.newsComments ?? [];
+  const comentarios = d.newsCommented ?? [];
   if (!comentarios.length) return null;
   const bloques: string[] = [];
   for (const c of comentarios) {
-    const n = s.stories.find((x) => x.id === c.id);
+    const n = s.stories.find((x) => x.id === c.storyId);
     // Un comentario sobre una noticia que ya no está guardada no se puede
     // presentar sin su titular, así que se descarta.
     if (!n) continue;

@@ -79,3 +79,11 @@ export function summarise(fresh: Story[], max = 4) {
     fresh.length === 1 ? "" : "s"
   }: ${cabeceras}${resto}`;
 }
+// El modelo confunde identificadores numéricos largos y acaba pegando el
+// comentario a la noticia equivocada. Se le dan referencias cortas, y la misma
+// función reconstruye después la correspondencia.
+export const NEWS_REF_MAX = 8;
+export function pendingRefs(stories: Story[], max = NEWS_REF_MAX) {
+  const pendientes = stories.filter((n) => !n.commented).slice(-max);
+  return new Map(pendientes.map((n, i) => [`N${i + 1}`, n]));
+}

@@ -247,97 +247,116 @@ test("A problem notice points at the panel", () => {
   assert.match(aviso.text, /Algo va mal/);
   assert.match(aviso.text, /meridian\.code-hive\.space/);
 });
-test("The agent comments each new story and does not repeat itself", () => {
-  const s = state();
-  s.stories = [
-    {
-      id: "n1",
-      at: now(),
-      source: "benzinga",
-      headline: "Morgan Stanley ve una oportunidad en el camión de Tesla",
-      summary: "",
-      symbols: ["TSLA"],
-      url: "",
-    },
-    {
-      id: "n2",
-      at: now(),
-      source: "reuters",
-      headline: "El petróleo sube por la tensión en el Mar Rojo",
-      summary: "",
-      symbols: ["SPY"],
-      url: "",
-    },
-  ];
-  const d = decision({
-    proposal: proposal({
-      newsComments: [
-        {
-          id: "n1",
-          comment: "Es una estimación a largo plazo, no un pedido firme.",
-        },
-        {
-          id: "n2",
-          comment: "Afecta a energía, no cambia mi visión del índice.",
-        },
-      ],
-    }),
-  });
-  const aviso = newsNotice(s, d)!;
-  assert.equal(aviso.kind, "noticias");
-  assert.match(aviso.text, /2 noticias nuevas/);
-  assert.match(aviso.text, /estimación a largo plazo/);
-  assert.match(aviso.text, /benzinga/);
-  // Sin comentarios no hay mensaje.
-  assert.equal(newsNotice(s, decision()), null);
-  // Un comentario sobre una noticia ya olvidada no rompe el mensaje.
-  const huerfano = decision({
-    proposal: proposal({
-      newsComments: [{ id: "no-existe", comment: "comentario sin noticia" }],
-    }),
-  });
-  assert.equal(newsNotice(s, huerfano), null);
+const story = (over: Record<string, unknown> = {}) => ({
+  id: "n1",
+  at: now(),
+  source: "benzinga",
+  headline: "Morgan Stanley ve una oportunidad en el camión de Tesla",
+  summary: "",
+  symbols: ["TSLA"],
+  url: "",
+  ...over,
 });
-test("A commented story is not offered for comment again", () => {
+const job = (s: State, event = "noticias") => ({
+  meta: {
+    id: id(),
+    startedAt: now(),
+    kind: "decision" as const,
+    targetId: id(),
+  },
+  state: structuredClone(s),
+  due: null,
+  event,
+});
+const waiting = (over: Record<string, unknown> = {}) =>
+  proposal({
+    action: "wait",
+    symbol: null,
+    qty: null,
+    limitPrice: null,
+    ...over,
+  });
+test("Each comment stays with the story the agent was actually shown", () => {
   const s = state();
   s.stories = [
-    {
-      id: "n1",
-      at: now(),
-      source: "x",
-      headline: "titular",
-      summary: "",
-      symbols: ["TSLA"],
-      url: "",
-    },
+    story({ id: "a", headline: "Titular sobre Tesla", symbols: ["TSLA"] }),
+    story({ id: "b", headline: "Titular sobre el índice", symbols: ["SPY"] }),
   ];
-  assert.notEqual(s.stories[0].commented, true);
-  const job = {
-    meta: {
-      id: id(),
-      startedAt: now(),
-      kind: "decision" as const,
-      targetId: id(),
-    },
-    state: structuredClone(s),
-    due: null,
-    event: "noticias",
-  };
-  applyDecision(
+  const j = job(s);
+  // Mientras el modelo piensa entra otra noticia: no debe descolocar nada.
+  s.stories.push(story({ id: "c", headline: "Titular que llegó después" }));
+  const d = applyDecision(
     s,
-    job,
+    j,
     {
       input: {},
-      proposal: proposal({
-        action: "wait",
-        symbol: null,
-        qty: null,
-        limitPrice: null,
-        newsComments: [{ id: "n1", comment: "Ruido, no cambia nada" }],
+      proposal: waiting({
+        newsComments: [
+          { ref: "N1", comment: "Tesis a largo plazo, no cambia nada hoy" },
+          { ref: "N2", comment: "Dato ya recogido por el precio" },
+        ],
+      }),
+      tokens: 1,
+    },
+    true,
+  );
+  assert.deepEqual(
+    d.newsCommented,
+    [
+      { storyId: "a", comment: "Tesis a largo plazo, no cambia nada hoy" },
+      { storyId: "b", comment: "Dato ya recogido por el precio" },
+    ],
+    "N1 es la primera que se le enseñó, N2 la segunda",
+  );
+  const aviso = newsNotice(s, d)!;
+  assert.match(aviso.text, /2 noticias nuevas/);
+  // Cada comentario aparece pegado a su propio titular.
+  const tesla = aviso.text.indexOf("Titular sobre Tesla");
+  const largoPlazo = aviso.text.indexOf("Tesis a largo plazo");
+  const indice = aviso.text.indexOf("Titular sobre el índice");
+  assert.ok(tesla < largoPlazo && largoPlazo < indice);
+});
+test("A story is commented once, and unknown references are ignored", () => {
+  const s = state();
+  s.stories = [story({ id: "a" })];
+  const j = job(s);
+  applyDecision(
+    s,
+    j,
+    {
+      input: {},
+      proposal: waiting({
+        newsComments: [{ ref: "N1", comment: "Ruido, no cambia nada" }],
       }),
       tokens: 1,
     },
     true,
   );
   assert.equal(s.stories[0].commented, true);
+  // Ya comentada: en la siguiente evaluación no se le ofrece ni se repite.
+  const segundo = applyDecision(
+    s,
+    job(s),
+    {
+      input: {},
+      proposal: waiting({
+        newsComments: [{ ref: "N1", comment: "Otra vez lo mismo" }],
+      }),
+      tokens: 1,
+    },
+    true,
+  );
+  assert.deepEqual(segundo.newsCommented, []);
+  assert.equal(newsNotice(s, segundo), null);
+});
+test("Short references are what the schema accepts, not raw provider ids", () => {
+  assert.throws(() =>
+    waiting({ newsComments: [{ ref: "61747603", comment: "x".repeat(20) }] }),
+  );
+  assert.throws(() =>
+    waiting({ newsComments: [{ ref: "n1", comment: "x".repeat(20) }] }),
+  );
+  assert.ok(
+    waiting({ newsComments: [{ ref: "N12", comment: "x".repeat(20) }] }),
+  );
 });

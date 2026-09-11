@@ -44,7 +44,7 @@ export const proposalSchema = z.object({
   newsComments: z
     .array(
       z.object({
-        id: z.string().min(1).max(80),
+        ref: z.string().regex(/^N[0-9]{1,2}$/),
         comment: z.string().min(10).max(600),
       }),
     )
@@ -88,6 +88,8 @@ export type Decision = {
   reviewAttempts?: number;
   sentAt?: string;
   review?: { at: string; text: string; price: number | null };
+  // Comentarios ya emparejados con su noticia, para el panel y para el aviso.
+  newsCommented?: { storyId: string; comment: string }[];
 };
 export type State = {
   paused: boolean;
