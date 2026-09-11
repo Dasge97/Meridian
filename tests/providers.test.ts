@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { alpaca, PAPER, AlpacaError } from "../src/alpaca.ts";
 import { decide } from "../src/model.ts";
 import { initialState } from "../src/domain.ts";
+import { analyse } from "../src/market.ts";
 test("Broker requests cannot select a live endpoint; provider errors retain status", async () => {
   process.env.ALPACA_KEY_ID = "test-key";
   process.env.ALPACA_SECRET_KEY = "test-secret";
@@ -25,6 +26,23 @@ test("Broker requests cannot select a live endpoint; provider errors retain stat
 });
 test("Agent receives approved memory and emits validated structured decisions", async () => {
   const s = initialState();
+  s.analysis = {
+    AAPL: analyse(
+      [
+        ...Array.from({ length: 60 }, (_, i) => ({
+          t: new Date(Date.UTC(2025, 0, 1 + i)).toISOString(),
+          o: 100 + i - 0.5,
+          h: 100 + i + 1,
+          l: 100 + i - 1,
+          c: 100 + i,
+          v: 1000,
+        })),
+        { vela: "rota" },
+      ],
+      160,
+      "prueba",
+    ),
+  };
   s.lessons = [
     {
       id: "yes",
@@ -53,6 +71,11 @@ test("Agent receives approved memory and emits validated structured decisions", 
       const context = JSON.parse(req.messages[1].content);
       assert.equal(context.lessons.length, 1);
       assert.equal(context.lessons[0].id, "yes");
+      // El agente debe recibir el análisis, no solo el precio del momento.
+      assert.ok(context.analysis, "falta el análisis en el contexto");
+      assert.equal(context.analysis.AAPL.indicators.sma20, 149.5);
+      assert.equal(context.analysis.AAPL.barsDiscarded, 1);
+      assert.equal(context.analysis.AAPL.recentBars.length, 20);
       return new Response(
         JSON.stringify({
           choices: [

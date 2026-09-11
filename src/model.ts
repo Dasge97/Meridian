@@ -39,13 +39,34 @@ const cap = (text: string, chars: number) =>
 export function context(s: State, event: string) {
   const v = s.versions.find((x) => x.id === s.activeVersion)!;
   const approved = s.lessons.filter((x) => v.lessonIds.includes(x.id));
-  const build = (lessons: number, decisions: number, body: number) => ({
+  const build = (
+    lessons: number,
+    decisions: number,
+    body: number,
+    bars: number,
+  ) => ({
     event,
     at: new Date().toISOString(),
     settings: s.settings,
     account: s.account,
     positions: s.positions,
     quotes: s.quotes,
+    analysis: Object.fromEntries(
+      Object.entries(s.analysis ?? {}).map(([symbol, a]) => [
+        symbol,
+        {
+          at: a.at,
+          source: a.source,
+          today: a.today,
+          indicators: a.indicators,
+          barsUsed: a.barsUsed,
+          barsDiscarded: a.barsDiscarded,
+          // Las sesiones recientes en crudo, por si quiere mirar el detalle en
+          // lugar de fiarse solo de los indicadores ya calculados.
+          recentBars: bars > 0 ? a.bars.slice(-bars) : [],
+        },
+      ]),
+    ),
     activeWatches: s.watches.filter((x) => x.status === "active").slice(-50),
     lessonsOmitted: Math.max(0, approved.length - lessons),
     lessons: approved
@@ -59,18 +80,21 @@ export function context(s: State, event: string) {
       review: d.review,
     })),
   });
-  // Memory is dropped before market data, oldest first.
-  for (const [lessons, decisions, body] of [
-    [40, 8, MAX_LESSON_BODY],
-    [20, 6, 800],
-    [10, 4, 500],
-    [5, 2, 300],
-    [0, 0, 0],
+  // Se recorta la memoria antes que los datos de mercado, y lo más antiguo
+  // primero. Los indicadores calculados nunca se quitan: ocupan poco y son lo
+  // que sustituye al histórico completo.
+  for (const [lessons, decisions, body, bars] of [
+    [40, 8, MAX_LESSON_BODY, 20],
+    [20, 6, 800, 20],
+    [10, 4, 500, 10],
+    [5, 2, 300, 5],
+    [0, 0, 0, 5],
+    [0, 0, 0, 0],
   ]) {
-    const input = build(lessons, decisions, body);
+    const input = build(lessons, decisions, body, bars);
     if (size(input) <= MAX_CONTEXT_CHARS) return input;
   }
-  return build(0, 0, 0);
+  return build(0, 0, 0, 0);
 }
 export function reviewContext(s: State, d: Decision) {
   const shared = {
