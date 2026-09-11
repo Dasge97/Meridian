@@ -231,7 +231,11 @@ export function applyDecision(
     const n = s.stories.find((x) => x.id === vista.id);
     if (!n || n.commented) continue;
     n.commented = true;
-    d.newsCommented.push({ storyId: n.id, comment: c.comment });
+    d.newsCommented.push({
+      storyId: n.id,
+      comment: c.comment,
+      matters: c.matters,
+    });
   }
   s.modelJob = null;
   log(s, "decision", `${p.action}: ${p.reason.slice(0, 200)}`);

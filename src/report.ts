@@ -158,17 +158,21 @@ export function newsNotice(s: State, d: Decision): Notice | null {
     // Un comentario sobre una noticia que ya no está guardada no se puede
     // presentar sin su titular, así que se descarta.
     if (!n) continue;
+    // El icono deja ver de un vistazo cuáles merecen leerse y cuáles son ruido.
     bloques.push(
-      `<b>${escapeHtml(n.symbols.join(", "))}</b> · ${escapeHtml(n.headline)}\n` +
-        `<i>${escapeHtml(n.source)}</i>\n` +
+      `${c.matters ? "❗" : "➖"} <b>${escapeHtml(n.symbols.join(", "))}</b> · ${escapeHtml(n.headline)}\n` +
         escapeHtml(c.comment),
     );
   }
   if (!bloques.length) return null;
-  const encabezado =
+  const importantes = comentarios.filter((c) => c.matters).length;
+  const cuenta =
     bloques.length === 1
-      ? "📰 Una noticia nueva"
-      : `📰 ${bloques.length} noticias nuevas`;
+      ? "Una noticia nueva"
+      : `${bloques.length} noticias nuevas`;
+  const encabezado = importantes
+    ? `📰 ${cuenta} · ${importantes} ${importantes === 1 ? "importa" : "importan"}`
+    : `📰 ${cuenta} · ninguna cambia nada`;
   return {
     kind: "noticias",
     text: `<b>${encabezado}</b>\n\n${bloques.join("\n\n")}`,

@@ -292,8 +292,16 @@ test("Each comment stays with the story the agent was actually shown", () => {
       input: {},
       proposal: waiting({
         newsComments: [
-          { ref: "N1", comment: "Tesis a largo plazo, no cambia nada hoy" },
-          { ref: "N2", comment: "Dato ya recogido por el precio" },
+          {
+            ref: "N1",
+            matters: false,
+            comment: "Tesis a largo plazo, no cambia nada hoy",
+          },
+          {
+            ref: "N2",
+            matters: true,
+            comment: "Dato ya recogido por el precio",
+          },
         ],
       }),
       tokens: 1,
@@ -303,8 +311,16 @@ test("Each comment stays with the story the agent was actually shown", () => {
   assert.deepEqual(
     d.newsCommented,
     [
-      { storyId: "a", comment: "Tesis a largo plazo, no cambia nada hoy" },
-      { storyId: "b", comment: "Dato ya recogido por el precio" },
+      {
+        storyId: "a",
+        comment: "Tesis a largo plazo, no cambia nada hoy",
+        matters: false,
+      },
+      {
+        storyId: "b",
+        comment: "Dato ya recogido por el precio",
+        matters: true,
+      },
     ],
     "N1 es la primera que se le enseñó, N2 la segunda",
   );
@@ -326,7 +342,9 @@ test("A story is commented once, and unknown references are ignored", () => {
     {
       input: {},
       proposal: waiting({
-        newsComments: [{ ref: "N1", comment: "Ruido, no cambia nada" }],
+        newsComments: [
+          { ref: "N1", matters: false, comment: "Ruido, no cambia nada" },
+        ],
       }),
       tokens: 1,
     },
@@ -340,7 +358,9 @@ test("A story is commented once, and unknown references are ignored", () => {
     {
       input: {},
       proposal: waiting({
-        newsComments: [{ ref: "N1", comment: "Otra vez lo mismo" }],
+        newsComments: [
+          { ref: "N1", matters: false, comment: "Otra vez lo mismo" },
+        ],
       }),
       tokens: 1,
     },
@@ -351,12 +371,54 @@ test("A story is commented once, and unknown references are ignored", () => {
 });
 test("Short references are what the schema accepts, not raw provider ids", () => {
   assert.throws(() =>
-    waiting({ newsComments: [{ ref: "61747603", comment: "x".repeat(20) }] }),
+    waiting({
+      newsComments: [
+        { ref: "61747603", matters: false, comment: "x".repeat(20) },
+      ],
+    }),
   );
   assert.throws(() =>
-    waiting({ newsComments: [{ ref: "n1", comment: "x".repeat(20) }] }),
+    waiting({
+      newsComments: [{ ref: "n1", matters: false, comment: "x".repeat(20) }],
+    }),
   );
   assert.ok(
-    waiting({ newsComments: [{ ref: "N12", comment: "x".repeat(20) }] }),
+    waiting({
+      newsComments: [{ ref: "N12", matters: false, comment: "x".repeat(20) }],
+    }),
+  );
+});
+test("The heading says at a glance how many stories actually matter", () => {
+  const s = state();
+  s.stories = [
+    story({ id: "a", headline: "Titular que importa" }),
+    story({ id: "b", headline: "Titular que no importa" }),
+  ];
+  const conImportante = decision({
+    newsCommented: [
+      { storyId: "a", comment: "Esto sí cambia algo", matters: true },
+      { storyId: "b", comment: "Esto es ruido", matters: false },
+    ],
+  });
+  const aviso = newsNotice(s, conImportante)!;
+  assert.match(aviso.text, /2 noticias nuevas · 1 importa/);
+  assert.match(aviso.text, /❗ .*Titular que importa/);
+  assert.match(aviso.text, /➖ .*Titular que no importa/);
+  const soloRuido = decision({
+    newsCommented: [{ storyId: "a", comment: "Ruido", matters: false }],
+  });
+  assert.match(newsNotice(s, soloRuido)!.text, /ninguna cambia nada/);
+});
+test("A news comment stays short enough to read on a phone", () => {
+  // Un comentario largo se rechaza en el esquema, antes de llegar a Telegram.
+  assert.throws(() =>
+    proposal({
+      newsComments: [{ ref: "N1", matters: false, comment: "x".repeat(400) }],
+    }),
+  );
+  assert.ok(
+    proposal({
+      newsComments: [{ ref: "N1", matters: false, comment: "x".repeat(300) }],
+    }),
   );
 });
