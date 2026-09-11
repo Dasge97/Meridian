@@ -1,0 +1,92 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { alpaca, PAPER, AlpacaError } from "../src/alpaca.ts";
+import { decide } from "../src/model.ts";
+import { initialState } from "../src/domain.ts";
+test("Broker requests cannot select a live endpoint; provider errors retain status", async () => {
+  process.env.ALPACA_KEY_ID = "test-key";
+  process.env.ALPACA_SECRET_KEY = "test-secret";
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, opts) => {
+      assert.equal(String(url), PAPER + "/v2/account");
+      assert.equal((opts?.headers as any)["APCA-API-KEY-ID"], "test-key");
+      return new Response(JSON.stringify({ cash: "1000" }), { status: 200 });
+    };
+    assert.equal((await alpaca("/v2/account")).cash, "1000");
+    globalThis.fetch = async () => new Response("{}", { status: 404 });
+    await assert.rejects(
+      () => alpaca("/v2/orders:by_client_order_id?client_order_id=test"),
+      (e: unknown) => e instanceof AlpacaError && e.status === 404,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("Agent receives approved memory and emits validated structured decisions", async () => {
+  const s = initialState();
+  s.lessons = [
+    {
+      id: "yes",
+      title: "Accepted",
+      body: "Contextual evidence",
+      source: "test",
+      createdAt: new Date().toISOString(),
+      status: "accepted",
+    },
+    {
+      id: "no",
+      title: "Unapproved",
+      body: "Do not use as a rule",
+      source: "test",
+      createdAt: new Date().toISOString(),
+      status: "proposed",
+    },
+  ];
+  s.versions[0].lessonIds = ["yes"];
+  const original = globalThis.fetch;
+  process.env.LLM_API_KEY = "test-key";
+  process.env.LLM_MODEL = "test-model";
+  try {
+    globalThis.fetch = async (url, opts) => {
+      const req = JSON.parse(String(opts?.body));
+      const context = JSON.parse(req.messages[1].content);
+      assert.equal(context.lessons.length, 1);
+      assert.equal(context.lessons[0].id, "yes");
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  action: "wait",
+                  symbol: null,
+                  qty: null,
+                  limitPrice: null,
+                  reason: "No hay evidencia suficiente",
+                  hypothesis: "Esperar una cotización reciente",
+                  reviewAfterHours: 24,
+                  watches: [],
+                  lessons: [],
+                }),
+              },
+            },
+          ],
+          usage: { total_tokens: 123 },
+        }),
+      );
+    };
+    const result = await decide(s, "test");
+    assert.equal(result.proposal.action, "wait");
+    assert.equal(result.tokens, 123);
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '{"action":"execute_shell"}' } }],
+        }),
+      );
+    await assert.rejects(() => decide(s, "test"));
+  } finally {
+    globalThis.fetch = original;
+  }
+});

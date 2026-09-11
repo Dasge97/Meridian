@@ -28,16 +28,16 @@ El agente puede dejarse vigilancias: «si el precio llega a X, vuelve a analizar
 
 ## Qué incluye
 
-| Área | Funcionalidad |
-|---|---|
-| Panel | Patrimonio, posiciones, conexión, consumo de llamadas y actividad |
-| Decisiones | Contexto guardado, hipótesis, versión, orden y revisión posterior |
-| Vigilancias | Precio ≤ / ≥, caducidad, invalidación, activación única y cancelación |
-| Aprendizaje | Lecciones propuestas por el agente y conocimiento aportado por el propietario |
-| Evolución | Aprobar/descartar lecciones, editar instrucciones y recuperar versiones |
-| Ejecución | Órdenes limitadas de acciones enteras en Alpaca Paper, durante mercado abierto |
-| Controles | Lista de activos, efectivo disponible, exposición, órdenes/día, llamadas/día y pausa |
-| Operación | Acceso privado, PostgreSQL persistente, Docker Compose y proceso independiente |
+| Área        | Funcionalidad                                                                        |
+| ----------- | ------------------------------------------------------------------------------------ |
+| Panel       | Patrimonio, posiciones, conexión, consumo de llamadas y actividad                    |
+| Decisiones  | Contexto guardado, hipótesis, versión, orden y revisión posterior                    |
+| Vigilancias | Precio ≤ / ≥, caducidad, invalidación, activación única y cancelación                |
+| Aprendizaje | Lecciones propuestas por el agente y conocimiento aportado por el propietario        |
+| Evolución   | Aprobar/descartar lecciones, editar instrucciones y recuperar versiones              |
+| Ejecución   | Órdenes limitadas de acciones enteras en Alpaca Paper, durante mercado abierto       |
+| Controles   | Lista de activos, efectivo disponible, exposición, órdenes/día, llamadas/día y pausa |
+| Operación   | Acceso privado, PostgreSQL persistente, Docker Compose y proceso independiente       |
 
 ## Cómo funciona
 

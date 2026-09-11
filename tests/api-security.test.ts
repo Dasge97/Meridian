@@ -1,0 +1,101 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+test("HTTP security: login, signed cookies, route protection, Origin and static assets", async () => {
+  process.env.MERIDIAN_TEST = "true";
+  process.env.ADMIN_PASSWORD = "only-for-test-password-123456";
+  process.env.SESSION_SECRET = "only-for-test-session-secret-1234567890123456";
+  process.env.APP_ORIGIN = "http://localhost:3000";
+  const { app } = await import("../src/server.ts");
+  const { pool } = await import("../src/db.ts");
+  try {
+    assert.equal(
+      (await app.inject({ method: "GET", url: "/api/state" })).statusCode,
+      401,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/login",
+          payload: { password: process.env.ADMIN_PASSWORD },
+        })
+      ).statusCode,
+      403,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers: { origin: process.env.APP_ORIGIN },
+          payload: { password: "wrong" },
+        })
+      ).statusCode,
+      401,
+    );
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/login",
+      headers: { origin: process.env.APP_ORIGIN },
+      payload: { password: process.env.ADMIN_PASSWORD },
+    });
+    assert.equal(login.statusCode, 200);
+    const c = login.cookies[0];
+    assert.equal(c.httpOnly, true);
+    assert.equal(c.sameSite, "Strict");
+    const headers = {
+      origin: process.env.APP_ORIGIN!,
+      cookie: `${c.name}=${c.value}`,
+    };
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/wake",
+          headers: { ...headers, origin: "https://attacker.example" },
+        })
+      ).statusCode,
+      403,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/state",
+          headers: { cookie: `meridian=${c.value.slice(0, -1)}x` },
+        })
+      ).statusCode,
+      401,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/settings",
+          headers,
+          payload: { maxOrderUsd: -1 },
+        })
+      ).statusCode,
+      400,
+    );
+    const page = await app.inject({ method: "GET", url: "/" });
+    assert.equal(page.statusCode, 200);
+    assert.match(page.body, /Meridian/);
+    assert.ok(page.headers["content-security-policy"]);
+    assert.equal(
+      (await app.inject({ method: "GET", url: "/.env" })).body.includes(
+        "SESSION_SECRET",
+      ),
+      false,
+    );
+    const logout = await app.inject({
+      method: "POST",
+      url: "/api/logout",
+      headers,
+    });
+    assert.equal(logout.statusCode, 200);
+  } finally {
+    await app.close();
+    await pool.end();
+  }
+});
