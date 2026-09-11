@@ -8,6 +8,9 @@ export type Story = {
   summary: string;
   symbols: string[];
   url: string;
+  // Una noticia se comenta una sola vez. Si la evaluación falla, sigue
+  // pendiente y se comenta en la siguiente.
+  commented?: boolean;
 };
 export const STORIES_KEPT = 30,
   HEADLINE_MAX = 300,

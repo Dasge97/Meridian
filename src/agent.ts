@@ -221,6 +221,9 @@ export function applyDecision(
       createdAt: new Date(t).toISOString(),
       decisionId: d.id,
     });
+  // Una noticia comentada no se vuelve a comentar en la siguiente evaluación.
+  const comentadas = new Set((p.newsComments ?? []).map((c) => c.id));
+  for (const n of s.stories) if (comentadas.has(n.id)) n.commented = true;
   s.modelJob = null;
   log(s, "decision", `${p.action}: ${p.reason.slice(0, 200)}`);
   return d;

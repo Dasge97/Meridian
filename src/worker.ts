@@ -21,6 +21,7 @@ import { analyse, type Analysis } from "./market.ts";
 import { sendTelegram, telegramConfigured } from "./telegram.ts";
 import {
   decisionNotice,
+  newsNotice,
   orderNotice,
   reviewNotice,
   problemNotice,
@@ -263,11 +264,11 @@ async function modelStep() {
       return;
     }
     const result = await decide(job.state, job.event!);
-    const aviso = await change((s) => {
+    const avisos = await change((s) => {
       const d = applyDecision(s, job, result, marketOpen);
-      return decisionNotice(s, d);
+      return [newsNotice(s, d), decisionNotice(s, d)];
     });
-    await notify(aviso);
+    for (const aviso of avisos) await notify(aviso);
   } catch (e) {
     // Sin el motivo concreto no hay forma de saber si falló el proveedor, si
     // tardó demasiado o si la respuesta no cumplía el esquema.

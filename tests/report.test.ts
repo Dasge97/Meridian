@@ -20,8 +20,10 @@ import {
   orderNotice,
   reviewNotice,
   problemNotice,
+  newsNotice,
   QUIET_HOURS,
 } from "../src/report.ts";
+import { applyDecision } from "../src/agent.ts";
 const ALLOWED = ["SPY", "AAPL", "TSLA"];
 const cruda = (over: Record<string, unknown> = {}) => ({
   id: "1001",
@@ -244,4 +246,98 @@ test("A problem notice points at the panel", () => {
   assert.equal(aviso.kind, "problema");
   assert.match(aviso.text, /Algo va mal/);
   assert.match(aviso.text, /meridian\.code-hive\.space/);
+});
+test("The agent comments each new story and does not repeat itself", () => {
+  const s = state();
+  s.stories = [
+    {
+      id: "n1",
+      at: now(),
+      source: "benzinga",
+      headline: "Morgan Stanley ve una oportunidad en el camión de Tesla",
+      summary: "",
+      symbols: ["TSLA"],
+      url: "",
+    },
+    {
+      id: "n2",
+      at: now(),
+      source: "reuters",
+      headline: "El petróleo sube por la tensión en el Mar Rojo",
+      summary: "",
+      symbols: ["SPY"],
+      url: "",
+    },
+  ];
+  const d = decision({
+    proposal: proposal({
+      newsComments: [
+        {
+          id: "n1",
+          comment: "Es una estimación a largo plazo, no un pedido firme.",
+        },
+        {
+          id: "n2",
+          comment: "Afecta a energía, no cambia mi visión del índice.",
+        },
+      ],
+    }),
+  });
+  const aviso = newsNotice(s, d)!;
+  assert.equal(aviso.kind, "noticias");
+  assert.match(aviso.text, /2 noticias nuevas/);
+  assert.match(aviso.text, /estimación a largo plazo/);
+  assert.match(aviso.text, /benzinga/);
+  // Sin comentarios no hay mensaje.
+  assert.equal(newsNotice(s, decision()), null);
+  // Un comentario sobre una noticia ya olvidada no rompe el mensaje.
+  const huerfano = decision({
+    proposal: proposal({
+      newsComments: [{ id: "no-existe", comment: "comentario sin noticia" }],
+    }),
+  });
+  assert.equal(newsNotice(s, huerfano), null);
+});
+test("A commented story is not offered for comment again", () => {
+  const s = state();
+  s.stories = [
+    {
+      id: "n1",
+      at: now(),
+      source: "x",
+      headline: "titular",
+      summary: "",
+      symbols: ["TSLA"],
+      url: "",
+    },
+  ];
+  assert.notEqual(s.stories[0].commented, true);
+  const job = {
+    meta: {
+      id: id(),
+      startedAt: now(),
+      kind: "decision" as const,
+      targetId: id(),
+    },
+    state: structuredClone(s),
+    due: null,
+    event: "noticias",
+  };
+  applyDecision(
+    s,
+    job,
+    {
+      input: {},
+      proposal: proposal({
+        action: "wait",
+        symbol: null,
+        qty: null,
+        limitPrice: null,
+        newsComments: [{ id: "n1", comment: "Ruido, no cambia nada" }],
+      }),
+      tokens: 1,
+    },
+    true,
+  );
+  assert.equal(s.stories[0].commented, true);
 });

@@ -108,7 +108,8 @@ export function orderNotice(
   if (!["filled", "partially_filled", "rejected", "canceled"].includes(estado))
     return null;
   const p = d.proposal;
-  const icono = estado === "filled" ? "✅" : estado === "rejected" ? "⛔" : "↩️";
+  const icono =
+    estado === "filled" ? "✅" : estado === "rejected" ? "⛔" : "↩️";
   const pos = s.positions.find((x) => x.symbol === p.symbol);
   const cartera = pos
     ? `\n\nAhora tienes ${pos.qty} de ${escapeHtml(p.symbol ?? "")}, valen ${money(pos.market_value)} (${money(pos.unrealized_pl)} sin realizar).`
@@ -144,5 +145,32 @@ export function problemNotice(mensaje: string): Notice {
     text:
       `<b>🔴 Algo va mal</b>\n\n${escapeHtml(mensaje)}\n\n` +
       `Míralo en https://meridian.code-hive.space`,
+  };
+}
+// Los comentarios del agente sobre las noticias que acaba de leer. Va aparte del
+// aviso de la decisión: al propietario le interesa aunque no se opere nada.
+export function newsNotice(s: State, d: Decision): Notice | null {
+  const comentarios = d.proposal.newsComments ?? [];
+  if (!comentarios.length) return null;
+  const bloques: string[] = [];
+  for (const c of comentarios) {
+    const n = s.stories.find((x) => x.id === c.id);
+    // Un comentario sobre una noticia que ya no está guardada no se puede
+    // presentar sin su titular, así que se descarta.
+    if (!n) continue;
+    bloques.push(
+      `<b>${escapeHtml(n.symbols.join(", "))}</b> · ${escapeHtml(n.headline)}\n` +
+        `<i>${escapeHtml(n.source)}</i>\n` +
+        escapeHtml(c.comment),
+    );
+  }
+  if (!bloques.length) return null;
+  const encabezado =
+    bloques.length === 1
+      ? "📰 Una noticia nueva"
+      : `📰 ${bloques.length} noticias nuevas`;
+  return {
+    kind: "noticias",
+    text: `<b>${encabezado}</b>\n\n${bloques.join("\n\n")}`,
   };
 }

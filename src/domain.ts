@@ -41,6 +41,15 @@ export const proposalSchema = z.object({
   reviewAfterHours: z.number().int().min(1).max(168),
   notify: z.boolean(),
   note: z.string().min(10).max(700),
+  newsComments: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(80),
+        comment: z.string().min(10).max(600),
+      }),
+    )
+    .max(8)
+    .default([]),
   watches: z.array(watchSchema).max(5),
   lessons: z.array(lessonSchema).max(3),
 });
