@@ -4,7 +4,12 @@ import type { State, Decision } from "../src/domain";
 import "./style.css";
 type Data = State & {
   totals: { decisions: number; events: number; equity: number };
-  connection: { alpaca: boolean; model: boolean; modelName: string | null };
+  connection: {
+    alpaca: boolean;
+    model: boolean;
+    modelName: string | null;
+    telegram: boolean;
+  };
 };
 const money = (n: number | string | null | undefined) =>
   n == null
@@ -662,6 +667,45 @@ function App() {
               )}
             </>
           )}
+          {tab === "Mercado" && (
+            <section className="panel">
+              <div className="section-title">
+                <h2>Noticias que está viendo</h2>
+                <span className="muted">
+                  {(s.stories || []).length} de las últimas 48 horas
+                </span>
+              </div>
+              {!(s.stories || []).length ? (
+                <Empty>
+                  Aquí aparecerán los titulares sobre tus activos. El worker los
+                  busca cada media hora.
+                </Empty>
+              ) : (
+                [...(s.stories || [])].reverse().map((n) => (
+                  <div className="event" key={n.id}>
+                    <p>
+                      <strong>{n.headline}</strong>
+                      <br />
+                      {n.summary && <span className="muted">{n.summary}</span>}
+                      <br />
+                      <small>
+                        {n.symbols.join(", ")} · {n.source}
+                        {n.url && (
+                          <>
+                            {" · "}
+                            <a href={n.url} target="_blank" rel="noreferrer">
+                              leer ↗
+                            </a>
+                          </>
+                        )}
+                      </small>
+                    </p>
+                    <time>{date(n.at)}</time>
+                  </div>
+                ))
+              )}
+            </section>
+          )}
           {tab === "Decisiones" && (
             <section className="panel">
               <div className="section-title">
@@ -992,6 +1036,20 @@ function App() {
                   <small>Última sincronización: {date(s.lastSync)}</small>
                 </section>
                 <section className="panel">
+                  <h2>Avisos por Telegram</h2>
+                  <Badge
+                    value={
+                      s.connection.telegram ? "Configurado" : "Sin configurar"
+                    }
+                  />
+                  <p>
+                    Escribe cuando opera, cuando una orden se ejecuta y cuando
+                    algo falla. Se configura en el servidor con TELEGRAM_TOKEN y
+                    TELEGRAM_CHAT_ID.
+                  </p>
+                  <small>El bot solo informa, no acepta órdenes.</small>
+                </section>
+                <section className="panel">
                   <h2>Modelo</h2>
                   <Badge
                     value={
@@ -1196,6 +1254,11 @@ function App() {
             </div>
             <Badge value={selected.proposal.action} />
             <Badge value={selected.status} />
+            {selected.proposal.note && (
+              <p className="preserve">
+                <strong>{selected.proposal.note}</strong>
+              </p>
+            )}
             <p>{selected.proposal.reason}</p>
             <h3>Hipótesis</h3>
             <p>{selected.proposal.hypothesis}</p>

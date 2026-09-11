@@ -48,12 +48,15 @@ El worker y la base de datos no se publican. `GET /api/health` responde
 | `LLM_API_KEY`       | Clave del proveedor del modelo.                                    |
 | `LLM_MODEL`         | Identificador del modelo a usar.                                   |
 | `LLM_BASE_URL`      | Dirección base compatible con Chat Completions.                    |
+| `TELEGRAM_TOKEN`    | Token del bot que avisa al propietario. Opcional.                  |
+| `TELEGRAM_CHAT_ID`  | Conversación a la que escribe el bot. Opcional.                    |
 | `ALLOW_LOCAL_LLM`   | `true` solo si el proveedor del modelo se sirve por HTTP sin TLS.  |
 | `TRUST_PROXY`       | `true` solo si el único acceso al puerto local es un proxy fiable. |
 
 La API se niega a arrancar si `SESSION_SECRET` no llega a 32 caracteres o
 `ADMIN_PASSWORD` no llega a 16. El panel arranca sin las claves de Alpaca ni del
-modelo, pero el agente no se puede activar sin ellas.
+modelo, pero el agente no se puede activar sin ellas. Sin las dos variables de
+Telegram no se envía ningún aviso y todo lo demás funciona igual.
 
 ## Seguridad
 

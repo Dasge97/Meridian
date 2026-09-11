@@ -13,6 +13,7 @@ import {
 } from "./domain.ts";
 import type { z } from "zod";
 import type { Analysis } from "./market.ts";
+import { mergeStories, summarise } from "./news.ts";
 // Worker state transitions, kept free of I/O so they can be tested directly.
 export type Job = {
   meta: NonNullable<State["modelJob"]>;
@@ -286,4 +287,19 @@ export function applyAnalysis(
       );
   }
   void t;
+}
+
+// Guarda las noticias nuevas y despierta al agente una sola vez por tanda.
+export function applyNews(s: State, raw: unknown[], t = Date.now()) {
+  const { stories, fresh } = mergeStories(
+    s.stories,
+    raw,
+    s.settings.symbols,
+    t,
+  );
+  s.stories = stories;
+  if (!fresh.length) return 0;
+  log(s, "news", summarise(fresh));
+  if (!s.paused) enqueue(s, summarise(fresh));
+  return fresh.length;
 }

@@ -65,3 +65,14 @@ export async function dailyBars(symbols: string[], days = HISTORY_DAYS) {
   const r = await alpaca("/v2/stocks/bars?" + query, "GET", undefined, true);
   return (r?.bars ?? {}) as Record<string, unknown[]>;
 }
+// Noticias de mercado del proveedor. Texto de terceros, nunca instrucciones.
+export async function marketNews(symbols: string[], limit = 30) {
+  const query = new URLSearchParams({
+    symbols: symbols.join(","),
+    limit: String(limit),
+    sort: "desc",
+    exclude_contentless: "true",
+  });
+  const r = await alpaca("/v1beta1/news?" + query, "GET", undefined, true);
+  return (r?.news ?? []) as unknown[];
+}

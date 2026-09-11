@@ -31,7 +31,8 @@ El agente puede dejarse vigilancias: «si el precio llega a X, vuelve a analizar
 | Área        | Funcionalidad                                                                        |
 | ----------- | ------------------------------------------------------------------------------------ |
 | Panel       | Patrimonio, posiciones, conexión, consumo de llamadas y actividad                    |
-| Mercado     | Velas diarias consolidadas, resumen de la sesión e indicadores calculados            |
+| Mercado     | Velas diarias consolidadas, resumen de la sesión, indicadores y noticias             |
+| Avisos      | Bot de Telegram que cuenta qué hace el agente y por qué, solo cuando importa         |
 | Decisiones  | Contexto guardado, hipótesis, versión, orden y revisión posterior                    |
 | Vigilancias | Precio ≤ / ≥, caducidad, invalidación, activación única y cancelación                |
 | Aprendizaje | Lecciones propuestas por el agente y conocimiento aportado por el propietario        |
@@ -142,7 +143,8 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 
 ## Límites conocidos de esta versión
 
-- Solo acciones/ETF estadounidenses, unidades enteras, órdenes limitadas `day`, sin cortos ni margen. No incluye cripto, fracciones, noticias, datos fundamentales ni backtesting.
+- Solo acciones/ETF estadounidenses, unidades enteras, órdenes limitadas `day`, sin cortos ni margen. No incluye cripto, fracciones, datos fundamentales ni backtesting.
+- Las noticias son titulares y resúmenes de terceros. No se verifican, y el agente las recibe con el aviso de que pueden estar equivocadas o desfasadas.
 - El análisis es técnico y sobre velas diarias: medias, variaciones, volatilidad, rango de 52 semanas y volumen relativo. No hay intradía, ni patrones de velas, ni comparación con un índice.
 - El precio del momento llega por IEX, que tiene cobertura parcial. Los precios caducan para operar tras 90 segundos; la ausencia de operaciones recientes puede bloquear decisiones legítimas. El histórico diario sí es consolidado.
 - El proveedor de datos devuelve de vez en cuando velas con valores imposibles. Se descartan y se cuenta cuántas, pero ningún filtro detecta un error pequeño y verosímil.
@@ -159,6 +161,9 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 ```text
 src/domain.ts     Esquemas, límites de riesgo y poda del historial
 src/market.ts     Validación de velas e indicadores, sin entrada/salida
+src/news.ts       Filtrado y caducidad de noticias, sin entrada/salida
+src/report.ts     Qué merece un aviso y cómo se redacta, sin entrada/salida
+src/telegram.ts   Envío del aviso
 src/agent.ts      Transiciones de estado del worker, sin entrada/salida
 src/worker.ts     Conexión de mercado, bucles y llamadas a Alpaca
 src/server.ts     API HTTP y panel estático

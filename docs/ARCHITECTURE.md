@@ -30,11 +30,33 @@ Los cálculos no hacen entrada ni salida: reciben las velas y devuelven números
 
 No hay noticias ni datos fundamentales. El agente recibe esa limitación por escrito en sus instrucciones.
 
+## Noticias
+
+El worker pide titulares al proveedor cada 30 minutos. Solo se guarda una noticia si menciona alguno de los activos configurados, y de sus activos solo se conservan los propios. Se descarta la que llega sin titular, sin fecha válida o sin identificador. El titular se recorta a 300 caracteres y el resumen a 600. Una noticia se olvida a las 48 horas, o antes si su activo sale de la lista.
+
+Una tanda con novedades encola **un solo** evento, no uno por titular. Mirar por tandas evita que el agente se dispare con cada noticia y agote su presupuesto diario en una mañana.
+
+El texto de una noticia es de terceros. Entra en el contexto como indicio que puede estar equivocado, sesgado o desfasado, nunca como instrucción ni como hecho comprobado, y las instrucciones del agente se lo dicen así. Al componer un aviso de Telegram se escapa, porque si no un titular podría colar marcado propio del mensaje.
+
+No hay datos fundamentales ni de resultados empresariales.
+
+## Avisos al propietario
+
+Un bot de Telegram escribe cuando pasa algo que merece interrumpir: una compra, una venta, una orden que se ejecuta o la rechazan, una propuesta que los límites bloquean, y cualquier problema que deje al agente pausado. Los estados intermedios de una orden no se cuentan.
+
+Seguir esperando se cuenta solo si el propio agente marca que hay algo nuevo, y como mucho una vez cada 4 horas. Sin ese freno el bot repetiría lo mismo varias veces por hora.
+
+El agente escribe el texto del aviso en su propia respuesta, en un campo aparte del razonamiento técnico. No cuesta una llamada extra al modelo.
+
+Si Telegram no está configurado no se envía nada y todo lo demás funciona igual. Si el envío falla, se registra el motivo y el laboratorio sigue: un aviso no puede impedir una decisión ni una orden.
+
+El bot solo informa. No acepta órdenes, así que nadie puede tocar el agente desde Telegram.
+
 ## Modelo y memoria
 
 Se reserva el trabajo y se incrementa el contador diario antes de llamar al modelo. La llamada se realiza fuera de las transacciones de PostgreSQL, por lo que el panel puede pausar o cambiar parámetros durante una evaluación. Al terminar se revisan configuración, versión, pausa y límites; una propuesta obsoleta no se envía.
 
-Se acepta únicamente JSON validado. El contexto incluye cartera, precios, el análisis por activo, límites, vigilancias, lecciones de la versión activa y las últimas 8 decisiones. Una respuesta cortada por el límite de tokens se detecta al recibirla y se explica como tal, en lugar de fallar después como JSON mal formado. Su tamaño está acotado a 60.000 caracteres: si la memoria aprobada crece por encima, se recortan primero las lecciones más antiguas y el cuerpo de cada una, después el número de decisiones recientes, y por último las velas en crudo. Los indicadores calculados no se quitan nunca: ocupan poco y son lo que sustituye al histórico completo. El contexto indica cuántas lecciones se han omitido. No hay búsqueda vectorial ni navegación web autónoma. La fuente de una lección externa es una referencia aportada por el usuario, no una página descargada ni verificada automáticamente.
+Se acepta únicamente JSON validado. El contexto incluye cartera, precios, el análisis por activo, las noticias recientes, límites, vigilancias, lecciones de la versión activa y las últimas 8 decisiones. Una respuesta cortada por el límite de tokens se detecta al recibirla y se explica como tal, en lugar de fallar después como JSON mal formado. Su tamaño está acotado a 60.000 caracteres: si la memoria aprobada crece por encima, se recortan primero las lecciones más antiguas y el cuerpo de cada una, después el número de decisiones recientes, y por último las velas en crudo. Los indicadores calculados no se quitan nunca: ocupan poco y son lo que sustituye al histórico completo. El contexto indica cuántas lecciones se han omitido. No hay búsqueda vectorial ni navegación web autónoma. La fuente de una lección externa es una referencia aportada por el usuario, no una página descargada ni verificada automáticamente.
 
 Las revisiones posteriores reciben decisión, cotizaciones disponibles, posiciones y las 20 órdenes más recientes, con el mismo tope de tamaño. Sus lecciones quedan propuestas hasta aprobación del propietario. Una aprobación o rechazo crea una versión de memoria/instrucciones. Recuperar una versión restaura sus lecciones activas.
 

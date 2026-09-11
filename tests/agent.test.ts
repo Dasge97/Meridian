@@ -37,6 +37,8 @@ const proposal = (over: Record<string, unknown> = {}) =>
     reason: "Hipótesis basada en precio",
     hypothesis: "Esperar confirmación",
     reviewAfterHours: 24,
+    notify: false,
+    note: "Sin novedad que contar al propietario",
     watches: [],
     lessons: [],
     ...over,

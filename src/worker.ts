@@ -2,12 +2,33 @@ import WebSocket from "ws";
 import { z } from "zod";
 import { describeFailure } from "./worker-failures.ts";
 import { pool, change, read } from "./db.ts";
-import { alpaca, configured, snapshot, dailyBars } from "./alpaca.ts";
+import {
+  alpaca,
+  configured,
+  snapshot,
+  dailyBars,
+  marketNews,
+} from "./alpaca.ts";
 import { decide, review, modelConfigured } from "./model.ts";
-import { log, lessonSchema, limitPriceString, type Quote } from "./domain.ts";
+import {
+  log,
+  now,
+  lessonSchema,
+  limitPriceString,
+  type Quote,
+} from "./domain.ts";
 import { analyse, type Analysis } from "./market.ts";
+import { sendTelegram, telegramConfigured } from "./telegram.ts";
+import {
+  decisionNotice,
+  orderNotice,
+  reviewNotice,
+  problemNotice,
+  type Notice,
+} from "./report.ts";
 import {
   applyAnalysis,
+  applyNews,
   applyMarket,
   applySnapshot,
   claimIntent,
@@ -25,6 +46,7 @@ let stopping = false,
   retryAt = 0,
   lastSync = 0,
   lastAnalysis = 0,
+  lastNews = 0,
   lastTick = 0,
   streamSymbols = "",
   marketOpen = false;
@@ -99,10 +121,11 @@ async function reconcileStep() {
         target.orderId = o.id;
       });
     } catch {
-      await change((s) => {
+      const aviso = await change((s) => {
         const target = s.decisions.find((x) => x.id === id);
-        if (!target) return;
-        if (target.status !== "unknown")
+        if (!target) return null;
+        const primeraVez = target.status !== "unknown";
+        if (primeraVez)
           log(
             s,
             "error",
@@ -110,7 +133,13 @@ async function reconcileStep() {
           );
         target.status = "unknown";
         s.paused = true;
+        return primeraVez
+          ? problemNotice(
+              `No se sabe si la orden de ${target.proposal.symbol} llegó a Alpaca. El agente queda pausado hasta que lo resuelvas desde el panel. No se reenviará sola.`,
+            )
+          : null;
       });
+      await notify(aviso);
     }
   }
 }
@@ -139,15 +168,17 @@ async function submitStep() {
       extended_hours: false,
       client_order_id: intent.id,
     });
-    await change((s) => {
+    const aviso = await change((s) => {
       const d = s.decisions.find((x) => x.id === intent.id);
-      if (!d) return;
+      if (!d) return null;
       d.status = order.status;
       d.orderId = order.id;
       log(s, "order", `Orden enviada a Alpaca Paper: ${p.symbol}`);
+      return orderNotice(s, d, order.status);
     });
+    await notify(aviso);
   } catch {
-    await change((s) => {
+    const aviso = await change((s) => {
       const d = s.decisions.find((x) => x.id === intent.id);
       if (d) d.status = "unknown";
       s.paused = true;
@@ -156,7 +187,11 @@ async function submitStep() {
         "error",
         "Respuesta de orden incierta; pausa y reconciliación obligatoria.",
       );
+      return problemNotice(
+        `La orden de ${intent.proposal.symbol} se envió pero Alpaca no confirmó. El agente queda pausado y hay que reconciliar desde el panel.`,
+      );
     });
+    await notify(aviso);
   }
 }
 // Velas diarias e indicadores. Cambian despacio, asi que se piden cada 5 minutos.
@@ -183,7 +218,15 @@ async function brokerStep() {
       const state = await read();
       const x = await snapshot(state.settings.symbols);
       marketOpen = Boolean(x.clock?.is_open);
-      await change((s) => applySnapshot(s, x));
+      const avisos = await change((s) => {
+        const antes = new Map(s.decisions.map((d) => [d.id, d.status]));
+        applySnapshot(s, x);
+        return s.decisions
+          .filter((d) => antes.get(d.id) !== d.status)
+          .map((d) => orderNotice(s, d, d.status))
+          .filter((n): n is Notice => n !== null);
+      });
+      for (const aviso of avisos) await notify(aviso);
     } catch {
       await change((s) => {
         log(
@@ -212,11 +255,19 @@ async function modelStep() {
           lessons: z.array(lessonSchema).max(3),
         })
         .parse(result.value);
-      await change((s) => applyReview(s, job, parsed, result.tokens));
+      const aviso = await change((s) => {
+        const due = applyReview(s, job, parsed, result.tokens);
+        return due ? reviewNotice(s, due) : null;
+      });
+      await notify(aviso);
       return;
     }
     const result = await decide(job.state, job.event!);
-    await change((s) => applyDecision(s, job, result, marketOpen));
+    const aviso = await change((s) => {
+      const d = applyDecision(s, job, result, marketOpen);
+      return decisionNotice(s, d);
+    });
+    await notify(aviso);
   } catch (e) {
     // Sin el motivo concreto no hay forma de saber si falló el proveedor, si
     // tardó demasiado o si la respuesta no cumplía el esquema.
@@ -230,6 +281,32 @@ async function modelStep() {
       );
     });
   }
+}
+// Enviar un aviso nunca puede impedir que el laboratorio siga funcionando: si
+// Telegram falla, se registra y se sigue.
+async function notify(notice: Notice | null) {
+  if (!notice || !telegramConfigured()) return;
+  try {
+    await sendTelegram(notice.text);
+    await change((s) => {
+      s.lastNotice = { at: now(), kind: notice.kind };
+    });
+  } catch (e) {
+    await change((s) => {
+      log(s, "error", `No se pudo avisar por Telegram: ${describeFailure(e)}`);
+    });
+  }
+}
+// Las noticias llegan de continuo. Se miran por tandas para que el agente no se
+// dispare con cada titular.
+export const NEWS_EVERY_MS = 1800000;
+async function newsStep() {
+  if (!configured() || Date.now() - lastNews < NEWS_EVERY_MS) return;
+  lastNews = Date.now();
+  const state = await read();
+  if (!state.settings.symbols.length) return;
+  const raw = await marketNews(state.settings.symbols);
+  await change((s) => applyNews(s, raw));
 }
 async function loop(name: string, step: () => Promise<void>, waitMs: number) {
   while (!stopping) {
@@ -253,6 +330,7 @@ await Promise.all([
   loop("broker", brokerStep, 2000),
   loop("model", modelStep, 2000),
   loop("analysis", analysisStep, 10000),
+  loop("news", newsStep, 30000),
 ]);
 await lock.query("SELECT pg_advisory_unlock(746391)");
 lock.release();

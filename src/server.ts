@@ -25,6 +25,7 @@ import {
 } from "./domain.ts";
 import { configured, alpaca, AlpacaError } from "./alpaca.ts";
 import { modelConfigured } from "./model.ts";
+import { telegramConfigured } from "./telegram.ts";
 const secret = process.env.SESSION_SECRET ?? "",
   password = process.env.ADMIN_PASSWORD ?? "",
   origin = process.env.APP_ORIGIN ?? "http://localhost:3000";
@@ -158,6 +159,7 @@ app.get("/api/state", async () => {
       alpaca: configured(),
       model: modelConfigured(),
       modelName: process.env.LLM_MODEL ?? null,
+      telegram: telegramConfigured(),
     },
   };
 });

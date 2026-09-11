@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Analysis } from "./market.ts";
+import type { Story } from "./news.ts";
 export const settingsSchema = z.object({
   symbols: z
     .array(z.string().regex(/^[A-Z]{1,5}$/))
@@ -38,6 +39,8 @@ export const proposalSchema = z.object({
   reason: z.string().min(10).max(4000),
   hypothesis: z.string().min(5).max(2000),
   reviewAfterHours: z.number().int().min(1).max(168),
+  notify: z.boolean(),
+  note: z.string().min(10).max(700),
   watches: z.array(watchSchema).max(5),
   lessons: z.array(lessonSchema).max(3),
 });
@@ -100,6 +103,8 @@ export type State = {
   stream: string;
   feeds: { trades: boolean; clock: boolean };
   analysis: Record<string, Analysis>;
+  stories: Story[];
+  lastNotice: { at: string; kind: string } | null;
   usage: { at: string; tokens: number }[];
   modelJob?: {
     id: string;
@@ -151,6 +156,8 @@ export function initialState(): State {
     stream: "disconnected",
     feeds: { trades: true, clock: true },
     analysis: {},
+    stories: [],
+    lastNotice: null,
     usage: [],
   };
 }
@@ -335,6 +342,7 @@ export const hotKeys = [
   "baseline",
   "stream",
   "feeds",
+  "lastNotice",
   "modelJob",
 ] as const;
 // History. Large, and only written when something actually happens.
@@ -346,6 +354,7 @@ export const coldKeys = [
   "equity",
   "usage",
   "analysis",
+  "stories",
 ] as const;
 type Hot = Pick<State, (typeof hotKeys)[number]>;
 type Cold = Pick<State, (typeof coldKeys)[number]>;
