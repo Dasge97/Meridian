@@ -31,6 +31,7 @@ El agente puede dejarse vigilancias: «si el precio llega a X, vuelve a analizar
 | Área        | Funcionalidad                                                                        |
 | ----------- | ------------------------------------------------------------------------------------ |
 | Panel       | Patrimonio, posiciones, conexión, consumo de llamadas y actividad                    |
+| Mercado     | Velas diarias consolidadas, resumen de la sesión e indicadores calculados            |
 | Decisiones  | Contexto guardado, hipótesis, versión, orden y revisión posterior                    |
 | Vigilancias | Precio ≤ / ≥, caducidad, invalidación, activación única y cancelación                |
 | Aprendizaje | Lecciones propuestas por el agente y conocimiento aportado por el propietario        |
@@ -141,8 +142,10 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 
 ## Límites conocidos de esta versión
 
-- Solo acciones/ETF estadounidenses, unidades enteras, órdenes limitadas `day`, sin cortos ni margen. No incluye cripto, fracciones, noticias, análisis de velas o backtesting.
-- IEX tiene cobertura parcial. Los precios caducan para operar tras 90 segundos; la ausencia de operaciones recientes puede bloquear decisiones legítimas.
+- Solo acciones/ETF estadounidenses, unidades enteras, órdenes limitadas `day`, sin cortos ni margen. No incluye cripto, fracciones, noticias, datos fundamentales ni backtesting.
+- El análisis es técnico y sobre velas diarias: medias, variaciones, volatilidad, rango de 52 semanas y volumen relativo. No hay intradía, ni patrones de velas, ni comparación con un índice.
+- El precio del momento llega por IEX, que tiene cobertura parcial. Los precios caducan para operar tras 90 segundos; la ausencia de operaciones recientes puede bloquear decisiones legítimas. El histórico diario sí es consolidado.
+- El proveedor de datos devuelve de vez en cuando velas con valores imposibles. Se descartan y se cuenta cuántas, pero ningún filtro detecta un error pequeño y verosímil.
 - El panel muestra patrimonio y posiciones, no atribución contable por estrategia ni comparación con un índice. Cambiar el saldo del simulador afecta la variación mostrada.
 - Memoria contextual y revisión cualitativa: no se ha demostrado rentabilidad ni mejora estadística. La simulación no reproduce todos los costes/ejecuciones reales.
 - La pausa no liquida posiciones ni revoca una petición HTTP ya en vuelo. La cancelación solicita a Alpaca cancelar todas las órdenes de la cuenta; confirma después su estado.
@@ -155,6 +158,7 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 
 ```text
 src/domain.ts     Esquemas, límites de riesgo y poda del historial
+src/market.ts     Validación de velas e indicadores, sin entrada/salida
 src/agent.ts      Transiciones de estado del worker, sin entrada/salida
 src/worker.ts     Conexión de mercado, bucles y llamadas a Alpaca
 src/server.ts     API HTTP y panel estático

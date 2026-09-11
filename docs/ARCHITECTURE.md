@@ -18,15 +18,27 @@ Al pausar, no se disparan condiciones de precio, aunque las vigilancias pueden c
 
 El WebSocket reconecta cada 10 segundos si falla. La sincronización HTTP aporta un fallback de último trade y reconcilia la cuenta. No existe una recuperación tick a tick de lo sucedido durante una desconexión: si una condición se cumplió y revirtió mientras el sistema estaba desconectado, puede no detectarse. Esto es un laboratorio de baja frecuencia.
 
+## Datos de mercado y análisis
+
+El worker descarga velas diarias consolidadas del feed `sip` de Alpaca, que cubre todo el mercado. El WebSocket de IEX solo ve su propio parqué: sirve para el precio del momento, no para medir tendencia ni volumen. La descarga se repite cada 5 minutos en su propio bucle y cubre unos 400 días naturales.
+
+De esas velas salen, por activo: medias de 20, 50 y 200 sesiones, distancia del precio a cada media, variación a 1, 5 y 20 sesiones, rango verdadero medio de 14 sesiones como medida de volatilidad, máximo y mínimo de 52 semanas, posición dentro de ese rango, y volumen de la última sesión frente a su media de 20. Se guardan también las 20 velas más recientes y el resumen de la sesión en curso.
+
+Cada vela se valida antes de usarse. Se descarta la que no es coherente consigo misma, la que trae valores no numéricos o no positivos, y la que sitúa un extremo a más de la mitad de distancia de su propio cierre. El caso que motivó el filtro es real: Alpaca devolvió SPY el 2 de febrero de 2026 con un mínimo de 69 en lugar de 690, lo que dejaba el mínimo de 52 semanas sin sentido. El número de velas descartadas se guarda y se muestra, tanto en el panel como en el contexto del agente.
+
+Los cálculos no hacen entrada ni salida: reciben las velas y devuelven números, así que se prueban directamente. El análisis se guarda con el historial, no con el estado que el worker reescribe cada dos segundos, porque cambia despacio.
+
+No hay noticias ni datos fundamentales. El agente recibe esa limitación por escrito en sus instrucciones.
+
 ## Modelo y memoria
 
 Se reserva el trabajo y se incrementa el contador diario antes de llamar al modelo. La llamada se realiza fuera de las transacciones de PostgreSQL, por lo que el panel puede pausar o cambiar parámetros durante una evaluación. Al terminar se revisan configuración, versión, pausa y límites; una propuesta obsoleta no se envía.
 
-Se acepta únicamente JSON validado. El contexto incluye cartera, precios, límites, vigilancias, lecciones de la versión activa y las últimas 8 decisiones. Su tamaño está acotado a 60.000 caracteres: si la memoria aprobada crece por encima, se recortan primero las lecciones más antiguas y el cuerpo de cada una, después el número de decisiones recientes. El contexto indica cuántas lecciones se han omitido. No hay búsqueda vectorial ni navegación web autónoma. La fuente de una lección externa es una referencia aportada por el usuario, no una página descargada ni verificada automáticamente.
+Se acepta únicamente JSON validado. El contexto incluye cartera, precios, el análisis por activo, límites, vigilancias, lecciones de la versión activa y las últimas 8 decisiones. Una respuesta cortada por el límite de tokens se detecta al recibirla y se explica como tal, en lugar de fallar después como JSON mal formado. Su tamaño está acotado a 60.000 caracteres: si la memoria aprobada crece por encima, se recortan primero las lecciones más antiguas y el cuerpo de cada una, después el número de decisiones recientes, y por último las velas en crudo. Los indicadores calculados no se quitan nunca: ocupan poco y son lo que sustituye al histórico completo. El contexto indica cuántas lecciones se han omitido. No hay búsqueda vectorial ni navegación web autónoma. La fuente de una lección externa es una referencia aportada por el usuario, no una página descargada ni verificada automáticamente.
 
 Las revisiones posteriores reciben decisión, cotizaciones disponibles, posiciones y las 20 órdenes más recientes, con el mismo tope de tamaño. Sus lecciones quedan propuestas hasta aprobación del propietario. Una aprobación o rechazo crea una versión de memoria/instrucciones. Recuperar una versión restaura sus lecciones activas.
 
-Errores de evaluación se registran sin guardar claves ni respuestas crudas del proveedor. El intento consume presupuesto. Un evento fallido requiere una nueva solicitud o evento; una revisión admite 3 intentos. Un reinicio durante una llamada puede perder su resultado, pero conserva el intento reservado.
+Errores de evaluación se registran con su motivo concreto: el campo del esquema que no cuadra, que el modelo no respondió a tiempo, o el error del proveedor. El texto se recorta a 300 caracteres. No se guardan claves ni respuestas crudas del proveedor. El intento consume presupuesto. Un evento fallido requiere una nueva solicitud o evento; una revisión admite 3 intentos. Un reinicio durante una llamada puede perder su resultado, pero conserva el intento reservado.
 
 Las transiciones de estado del worker viven en `src/agent.ts` y no hacen entrada/salida: reservar trabajo, reservar una intención, aplicar una sincronización, aplicar el mercado, guardar una decisión y guardar una revisión. `src/worker.ts` solo se ocupa de la conexión, los bucles y las llamadas HTTP. Las pruebas ejercitan las transiciones directamente, sin base de datos ni red.
 
@@ -45,6 +57,8 @@ Si el envío o su confirmación fallan, marcar `unknown` y pausar. La recuperaci
 Los límites son controles previos, no garantías de precio final o de pérdida máxima. Una venta requiere acciones suficientes; una compra debe caber en efectivo, exposición y límite por posición. El umbral de pérdida compara patrimonio actual con la primera sincronización; bloquea compras nuevas, no cierra posiciones.
 
 ## Panel
+
+El panel tiene una pestaña Mercado con los mismos datos que recibe el agente. Una vigilancia enlaza con la decisión que la creó, y el detalle de una decisión lista las vigilancias y las lecciones que salieron de ella, con su estado. Una vigilancia que el agente propuso pero quedó fuera de límites aparece marcada como no guardada.
 
 `GET /api/state` no devuelve el historial completo. Envía las 300 decisiones más recientes sin su contexto guardado, 200 eventos, 500 muestras de patrimonio y 200 registros de consumo, más un recuento total de cada uno. El panel pide el contexto de una decisión concreta a `GET /api/decisions/:id` al abrir su detalle. El panel consulta el estado cada 5 segundos, así que la respuesta no debe crecer con el historial.
 

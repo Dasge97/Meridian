@@ -11,7 +11,9 @@ El detalle funcional está en `README.md` y el técnico en `docs/ARCHITECTURE.md
 
 - `api`: servidor Fastify que sirve la API y el panel React compilado.
 - `worker`: proceso independiente que escucha el mercado, comprueba las
-  vigilancias, llama al modelo y envía las órdenes a Alpaca Paper.
+  vigilancias, calcula el análisis técnico, llama al modelo y envía las órdenes a
+  Alpaca Paper. Corre cuatro bucles separados para que una llamada al modelo no
+  frene la vigilancia de precios.
 - `migrate`: prepara el esquema y termina.
 - `db`: PostgreSQL 17 con el estado del laboratorio.
 
