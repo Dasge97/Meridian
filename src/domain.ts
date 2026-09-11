@@ -97,6 +97,7 @@ export type State = {
   calls: { day: string; count: number };
   baseline: number | null;
   stream: string;
+  feeds: { trades: boolean; clock: boolean };
   usage: { at: string; tokens: number }[];
   modelJob?: {
     id: string;
@@ -146,6 +147,7 @@ export function initialState(): State {
     calls: { day: "", count: 0 },
     baseline: null,
     stream: "disconnected",
+    feeds: { trades: true, clock: true },
     usage: [],
   };
 }
@@ -306,6 +308,7 @@ export const hotKeys = [
   "calls",
   "baseline",
   "stream",
+  "feeds",
   "modelJob",
 ] as const;
 // History. Large, and only written when something actually happens.

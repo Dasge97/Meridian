@@ -161,7 +161,7 @@ async function brokerStep() {
     try {
       const state = await read();
       const x = await snapshot(state.settings.symbols);
-      marketOpen = Boolean(x.clock.is_open);
+      marketOpen = Boolean(x.clock?.is_open);
       await change((s) => applySnapshot(s, x));
     } catch {
       await change((s) => {

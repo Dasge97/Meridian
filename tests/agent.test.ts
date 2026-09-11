@@ -331,3 +331,40 @@ test("Pruning never drops accepted lessons or active watches", () => {
   assert.ok(s.watches.some((w) => w.id === "vigilando"));
   assert.equal(s.watches.filter((w) => w.status !== "active").length, 500);
 });
+test("A missing price or calendar feed still syncs the account and warns once", () => {
+  const s = state();
+  applySnapshot(s, {
+    account: { equity: "9000", cash: "9000", status: "ACTIVE" },
+    positions: [],
+    orders: [],
+    trades: null,
+    clock: null,
+  });
+  assert.equal(s.account.equity, "9000", "la cuenta se sincroniza igual");
+  assert.equal(s.feeds.trades, false);
+  assert.equal(s.feeds.clock, false);
+  assert.equal(s.events.length, 2, "un aviso por cada origen de datos caído");
+  applySnapshot(s, {
+    account: { equity: "9000", cash: "9000", status: "ACTIVE" },
+    positions: [],
+    orders: [],
+    trades: null,
+    clock: null,
+  });
+  assert.equal(
+    s.events.length,
+    2,
+    "no se repite el aviso en cada sincronización",
+  );
+  applySnapshot(s, {
+    account: { equity: "9000", cash: "9000", status: "ACTIVE" },
+    positions: [],
+    orders: [],
+    trades: { trades: { AAPL: { p: 205, t: now() } } },
+    clock: { is_open: true },
+  });
+  assert.equal(s.feeds.trades, true);
+  assert.equal(s.feeds.clock, true);
+  assert.equal(s.quotes.AAPL.price, 205);
+  assert.equal(s.events.length, 4, "también se avisa de la recuperación");
+});

@@ -391,6 +391,18 @@ function App() {
               </button>
             </div>
           )}
+          {s.feeds && (!s.feeds.trades || !s.feeds.clock) && (
+            <div className="alert error" role="status">
+              Alpaca no está devolviendo{" "}
+              {!s.feeds.trades && !s.feeds.clock
+                ? "precios ni el calendario de mercado"
+                : !s.feeds.trades
+                  ? "precios de mercado"
+                  : "el calendario de mercado"}
+              . El saldo y las posiciones siguen sincronizándose. No se enviarán
+              órdenes hasta que vuelva a responder.
+            </div>
+          )}
           {tab === "Resumen" && (
             <>
               <div className="metrics">

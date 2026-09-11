@@ -23,8 +23,8 @@ export type Snapshot = {
   account: any;
   positions: any[];
   orders: any[];
-  trades: { trades?: Record<string, any> };
-  clock: { is_open?: boolean };
+  trades: { trades?: Record<string, any> } | null;
+  clock: { is_open?: boolean } | null;
 };
 export const EQUITY_SAMPLE_MS = 300000,
   STREAM_SILENCE_MS = 120000;
@@ -34,8 +34,29 @@ export function applySnapshot(s: State, x: Snapshot, t = Date.now()) {
   s.orders = x.orders;
   s.lastSync = new Date(t).toISOString();
   if (s.baseline === null) s.baseline = Number(x.account.equity);
-  for (const [symbol, trade] of Object.entries(x.trades.trades ?? {}))
+  for (const [symbol, trade] of Object.entries(x.trades?.trades ?? {}))
     if (trade?.p > 0) s.quotes[symbol] = { price: trade.p, at: trade.t };
+  // Solo se avisa cuando cambia, porque esto se sincroniza cada 30 segundos.
+  for (const [feed, ok, texto] of [
+    [
+      "trades",
+      x.trades !== null,
+      "Alpaca no devuelve precios. Sin precios recientes no se envían órdenes.",
+    ],
+    [
+      "clock",
+      x.clock !== null,
+      "Alpaca no devuelve el calendario de mercado. Se asume cerrado y no se envían órdenes.",
+    ],
+  ] as const)
+    if (s.feeds[feed] !== ok) {
+      s.feeds[feed] = ok;
+      log(
+        s,
+        ok ? "market" : "error",
+        ok ? `Alpaca vuelve a responder: ${feed}` : texto,
+      );
+    }
   if (
     !s.equity.length ||
     t - Date.parse(s.equity.at(-1)!.at) > EQUITY_SAMPLE_MS

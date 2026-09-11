@@ -27,17 +27,22 @@ export async function alpaca(
   return r.status === 204 ? null : r.json();
 }
 export async function snapshot(symbols: string[]) {
-  const [account, positions, orders, trades, clock] = await Promise.all([
+  // Cuenta, posiciones y órdenes son obligatorias: los límites dependen de ellas.
+  const [account, positions, orders] = await Promise.all([
     alpaca("/v2/account"),
     alpaca("/v2/positions"),
     alpaca("/v2/orders?status=all&limit=100&direction=desc"),
+  ]);
+  // Precios y calendario pueden faltar. Sin precios recientes o sin saber que el
+  // mercado está abierto no se envían órdenes, pero el panel sigue mostrando la cuenta.
+  const [trades, clock] = await Promise.all([
     alpaca(
       "/v2/stocks/trades/latest?feed=iex&symbols=" + symbols.join(","),
       "GET",
       undefined,
       true,
-    ),
-    alpaca("/v2/clock"),
+    ).catch(() => null),
+    alpaca("/v2/clock").catch(() => null),
   ]);
   return { account, positions, orders, trades, clock };
 }
