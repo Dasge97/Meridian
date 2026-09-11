@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { State, Decision } from "../src/domain";
 import "./style.css";
 type Data = State & {
+  totals: { decisions: number; events: number; equity: number };
   connection: { alpaca: boolean; model: boolean; modelName: string | null };
 };
 const money = (n: number | string | null | undefined) =>
@@ -120,7 +121,8 @@ function App() {
     [busy, setBusy] = useState(false),
     [selected, setSelected] = useState<Decision | null>(null),
     [showWatch, setShowWatch] = useState(false),
-    [showLesson, setShowLesson] = useState(false);
+    [showLesson, setShowLesson] = useState(false),
+    [detail, setDetail] = useState<{ id: string; input: unknown } | null>(null);
   async function refresh() {
     const r = await fetch("/api/state");
     if (r.status === 401) {
@@ -159,6 +161,25 @@ function App() {
       setBusy(false);
     }
   }
+  useEffect(() => {
+    if (!selected) {
+      setDetail(null);
+      return;
+    }
+    let cancelled = false;
+    const target = selected.id;
+    fetch(`/api/decisions/${target}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled) setDetail({ id: target, input: d?.input ?? null });
+      })
+      .catch(() => {
+        if (!cancelled) setDetail({ id: target, input: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id]);
   useEffect(() => {
     if (!selected) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -515,7 +536,7 @@ function App() {
             <section className="panel">
               <div className="section-title">
                 <h2>Historial completo</h2>
-                <span className="muted">{s.decisions.length} decisiones</span>
+                <span className="muted">{s.totals.decisions} decisiones</span>
               </div>
               {!s.decisions.length ? (
                 <Empty>
@@ -1077,7 +1098,13 @@ function App() {
             )}
             <details>
               <summary>Información disponible al decidir</summary>
-              <pre>{JSON.stringify(selected.input, null, 2)}</pre>
+              <pre>
+                {detail?.id !== selected.id
+                  ? "Cargando…"
+                  : detail.input === null
+                    ? "El contexto guardado solo se conserva para las decisiones recientes."
+                    : JSON.stringify(detail.input, null, 2)}
+              </pre>
             </details>
             <small>ID: {selected.id}</small>
           </section>

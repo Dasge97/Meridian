@@ -80,6 +80,8 @@ git pull --ff-only origin main
 docker compose up -d --build
 ```
 
+Si vienes de la primera versión, su migración reparte el estado en dos filas de `meridian_state`: la fila 1 con lo que cambia cada dos segundos y la fila 2 con el historial. No se pierde nada y no hay que hacer nada a mano. A partir de esa actualización el historial se poda: consulta sus topes en [ARCHITECTURE.md](ARCHITECTURE.md) y guarda una copia si quieres conservarlo entero.
+
 Revisa logs y estado antes de reanudar. No actualices la major de PostgreSQL sin un procedimiento de migración de datos.
 
 ## Incidencias

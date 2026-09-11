@@ -21,6 +21,7 @@ import {
   log,
   enqueue,
   validWatch,
+  UserError,
 } from "./domain.ts";
 import { configured, alpaca, AlpacaError } from "./alpaca.ts";
 import { modelConfigured } from "./model.ts";
@@ -86,13 +87,12 @@ app.addHook("onRequest", async (req, reply) => {
   }
 });
 app.setErrorHandler((e, req, reply) => {
+  if (e instanceof UserError) return reply.code(400).send({ error: e.message });
   if (e instanceof z.ZodError)
-    return reply
-      .code(400)
-      .send({
-        error: "Datos no válidos",
-        details: e.issues.map((x) => ({ path: x.path, message: x.message })),
-      });
+    return reply.code(400).send({
+      error: "Datos no válidos",
+      details: e.issues.map((x) => ({ path: x.path, message: x.message })),
+    });
   req.log.error(
     { message: e instanceof Error ? e.message : "Unknown error" },
     "Request failed",
@@ -125,24 +125,53 @@ app.post("/api/logout", async (req, reply) => {
   reply.clearCookie("meridian", { path: "/" });
   return { ok: true };
 });
-app.get("/api/state", async () => ({
-  ...(await read()),
-  connection: {
-    alpaca: configured(),
-    model: modelConfigured(),
-    modelName: process.env.LLM_MODEL ?? null,
-  },
-}));
+// The panel polls this every few seconds, so it never carries the whole history.
+export const PANEL_DECISIONS = 300,
+  PANEL_EVENTS = 200,
+  PANEL_EQUITY = 500,
+  PANEL_USAGE = 200;
+app.get("/api/state", async () => {
+  const s = await read();
+  return {
+    ...s,
+    // The saved model context is fetched per decision from /api/decisions/:id.
+    decisions: s.decisions
+      .slice(-PANEL_DECISIONS)
+      .map((d) => ({ ...d, input: null })),
+    events: s.events.slice(0, PANEL_EVENTS),
+    equity: s.equity.slice(-PANEL_EQUITY),
+    usage: s.usage.slice(-PANEL_USAGE),
+    totals: {
+      decisions: s.decisions.length,
+      events: s.events.length,
+      equity: s.equity.length,
+    },
+    connection: {
+      alpaca: configured(),
+      model: modelConfigured(),
+      modelName: process.env.LLM_MODEL ?? null,
+    },
+  };
+});
+app.get("/api/decisions/:id", async (req, reply) => {
+  const p = z.object({ id: z.uuid() }).parse(req.params);
+  const d = (await read()).decisions.find((d) => d.id === p.id);
+  return d ? d : reply.code(404).send({ error: "Esa decisión no existe" });
+});
 app.post("/api/pause", async (req) => {
   const { paused } = z.object({ paused: z.boolean() }).parse(req.body);
   await change((s) => {
     if (!paused && (!configured() || !modelConfigured()))
-      throw new Error("Faltan conexiones");
+      throw new UserError(
+        "Faltan las claves de Alpaca Paper o del modelo. Configúralas en el servidor.",
+      );
     if (
       !paused &&
       s.decisions.some((d) => ["unknown", "submitting"].includes(d.status))
     )
-      throw new Error("Reconciliación pendiente");
+      throw new UserError(
+        "Hay una orden sin reconciliar. Resuélvela antes de activar el agente.",
+      );
     s.paused = paused;
     log(s, "control", paused ? "Agente pausado" : "Agente activado");
     if (!paused && !s.queue.length)
@@ -168,26 +197,23 @@ app.put("/api/settings", async (req) => {
   });
   return { ok: true };
 });
-app.post("/api/watches", async (req, reply) => {
+app.post("/api/watches", async (req) => {
   const w = watchSchema.parse(req.body);
-  return change((s) => {
+  await change((s) => {
     if (!validWatch(w, s))
-      return reply
-        .code(400)
-        .send({
-          error:
-            "Vigilancia fuera de límites: revisa activo, caducidad (máximo 30 días) y número de vigilancias",
-        });
+      throw new UserError(
+        "Vigilancia fuera de límites: revisa activo, caducidad (máximo 30 días) y número de vigilancias",
+      );
     s.watches.push({ ...w, id: id(), status: "active", createdAt: now() });
     log(s, "watch", `Vigilancia manual: ${w.symbol}`);
-    return { ok: true };
   });
+  return { ok: true };
 });
 app.post("/api/watches/:id/cancel", async (req) => {
   const p = z.object({ id: z.uuid() }).parse(req.params);
   await change((s) => {
     const w = s.watches.find((w) => w.id === p.id);
-    if (!w) throw new Error("No existe");
+    if (!w) throw new UserError("Esa vigilancia no existe");
     w.status = "cancelled";
     log(s, "watch", `Vigilancia cancelada: ${w.symbol}`);
   });
@@ -208,7 +234,7 @@ app.post("/api/lessons/:id/status", async (req) => {
     .parse(req.body);
   await change((s) => {
     const l = s.lessons.find((l) => l.id === p.id);
-    if (!l) throw new Error("No existe");
+    if (!l) throw new UserError("Esa lección no existe");
     l.status = status;
     const previous = s.versions.find((v) => v.id === s.activeVersion)!;
     const v = {
@@ -252,7 +278,7 @@ app.post("/api/versions/:id/activate", async (req) => {
   const { id: versionId } = z.object({ id: z.uuid() }).parse(req.params);
   await change((s) => {
     const v = s.versions.find((v) => v.id === versionId);
-    if (!v) throw new Error("No existe");
+    if (!v) throw new UserError("Esa versión no existe");
     s.activeVersion = v.id;
     for (const l of s.lessons)
       if (v.lessonIds.includes(l.id)) l.status = "accepted";
@@ -285,11 +311,9 @@ app.post("/api/orders/:id/confirm-absent", async (req, reply) => {
     !d.sentAt ||
     Date.now() - Date.parse(d.sentAt) < 120000
   )
-    return reply
-      .code(400)
-      .send({
-        error: "Solo se puede resolver una orden incierta tras dos minutos",
-      });
+    return reply.code(400).send({
+      error: "Solo se puede resolver una orden incierta tras dos minutos",
+    });
   try {
     await alpaca("/v2/orders:by_client_order_id?client_order_id=" + d.id);
     return reply
@@ -301,7 +325,7 @@ app.post("/api/orders/:id/confirm-absent", async (req, reply) => {
   await change((s) => {
     const target = s.decisions.find((x) => x.id === decisionId)!;
     if (target.status !== "unknown")
-      throw new Error("La orden cambió de estado");
+      throw new UserError("La orden cambió de estado: vuelve a revisarla");
     target.status = "not_submitted";
     log(
       s,
@@ -318,7 +342,9 @@ app.post("/api/orders/cancel-open", async () => {
   });
   const results = await alpaca("/v2/orders", "DELETE");
   if (Array.isArray(results) && results.some((x) => x.status >= 300))
-    throw new Error("Algunas cancelaciones fallaron; consulta Alpaca");
+    throw new UserError(
+      "Alpaca no pudo cancelar todas las órdenes; comprueba su estado allí",
+    );
   return { ok: true };
 });
 await app.register(serveStatic, { root: path.resolve("dist") });

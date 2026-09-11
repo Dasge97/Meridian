@@ -3,17 +3,15 @@ import { z } from "zod";
 import { pool, change, read } from "./db.ts";
 import { alpaca, configured, snapshot } from "./alpaca.ts";
 import { decide, review, modelConfigured } from "./model.ts";
+import { log, lessonSchema, limitPriceString, type Quote } from "./domain.ts";
 import {
-  id,
-  now,
-  log,
-  enqueue,
-  validWatch,
-  watchState,
-  orderGuard,
-  lessonSchema,
-  type Quote,
-} from "./domain.ts";
+  applyMarket,
+  applySnapshot,
+  claimIntent,
+  claimJob,
+  applyDecision,
+  applyReview,
+} from "./agent.ts";
 // One worker owns the market connection and outbox, including across rolling restarts.
 const lock = await pool.connect();
 if (!(await lock.query("SELECT pg_try_advisory_lock(746391) AS ok")).rows[0].ok)
@@ -69,90 +67,37 @@ function connect(symbols: string[]) {
     retryAt = Date.now() + 10000;
   });
 }
-async function tick() {
-  const state = await read();
-  if (ws && streamSymbols !== state.settings.symbols.join(",")) ws.close();
-  if (!ws) connect(state.settings.symbols);
-  if (configured() && Date.now() - lastSync > 30000) {
-    lastSync = Date.now();
-    try {
-      const x = await snapshot(state.settings.symbols);
-      marketOpen = Boolean(x.clock.is_open);
-      await change((s) => {
-        s.account = x.account;
-        s.positions = x.positions;
-        s.orders = x.orders;
-        s.lastSync = now();
-        if (s.baseline === null) s.baseline = Number(x.account.equity);
-        for (const [symbol, t] of Object.entries(x.trades.trades ?? {}) as [
-          string,
-          any,
-        ][])
-          if (t?.p > 0) s.quotes[symbol] = { price: t.p, at: t.t };
-        if (
-          !s.equity.length ||
-          Date.now() - Date.parse(s.equity.at(-1)!.at) > 300000
-        )
-          s.equity.push({ at: now(), value: Number(x.account.equity) });
-        for (const d of s.decisions) {
-          const o = x.orders.find((o: any) => o.client_order_id === d.id);
-          if (o && d.status !== o.status) {
-            d.status = o.status;
-            d.orderId = o.id;
-            log(s, "order", `${d.proposal.symbol}: ${o.status}`);
-            if (o.status === "filled") enqueue(s, `Orden ejecutada: ${d.id}`);
-          }
-        }
-      });
-    } catch {
-      await change((s) => {
-        log(
-          s,
-          "error",
-          "No se pudo sincronizar Alpaca; no se enviarán órdenes con datos obsoletos.",
-        );
-      });
-    }
-  }
-  await change((s) => {
-    s.heartbeat = now();
-    s.stream =
-      ws?.readyState === WebSocket.OPEN && Date.now() - lastTick < 120000
-        ? "connected"
-        : "disconnected";
-    for (const [symbol, q] of Object.entries(quotes))
-      if (
-        s.settings.symbols.includes(symbol) &&
-        (!s.quotes[symbol] ||
-          Date.parse(q.at) > Date.parse(s.quotes[symbol].at))
-      )
-        s.quotes[symbol] = q;
-    for (const w of s.watches) {
-      const next = watchState(w, s.paused ? undefined : s.quotes[w.symbol]);
-      if (next !== w.status) {
-        w.status = next;
-        log(s, "watch", `${w.symbol}: vigilancia ${next}`);
-        if (next === "triggered") enqueue(s, `Vigilancia ${w.id}: ${w.reason}`);
-      }
-    }
+// Prices and watches. Never waits on the model, so conditions keep being checked.
+async function marketStep() {
+  const symbols = await change((s) => {
+    applyMarket(s, quotes, ws?.readyState === WebSocket.OPEN, lastTick);
+    return s.settings.symbols;
   });
-  // Reconcile ambiguous submissions after a crash or timeout. Never blindly resend.
-  const current = await read();
-  for (const d of current.decisions.filter((d) =>
-    ["submitting", "unknown"].includes(d.status),
-  )) {
+  if (ws && streamSymbols !== symbols.join(",")) ws.close();
+  if (!ws) connect(symbols);
+}
+// Reconcile ambiguous submissions after a crash or timeout. Never blindly resend.
+async function reconcileStep() {
+  const ambiguous = await change((s) =>
+    s.decisions
+      .filter((d) => ["submitting", "unknown"].includes(d.status))
+      .map((d) => d.id),
+  );
+  for (const id of ambiguous) {
     try {
       const o = await alpaca(
-        "/v2/orders:by_client_order_id?client_order_id=" + d.id,
+        "/v2/orders:by_client_order_id?client_order_id=" + id,
       );
       await change((s) => {
-        const target = s.decisions.find((x) => x.id === d.id)!;
+        const target = s.decisions.find((x) => x.id === id);
+        if (!target) return;
         target.status = o.status;
         target.orderId = o.id;
       });
     } catch {
       await change((s) => {
-        const target = s.decisions.find((x) => x.id === d.id)!;
+        const target = s.decisions.find((x) => x.id === id);
+        if (!target) return;
         if (target.status !== "unknown")
           log(
             s,
@@ -164,111 +109,78 @@ async function tick() {
       });
     }
   }
-  const intent = await change((s) => {
-    const d = s.decisions.find((x) => x.status === "pending");
-    if (!d) return null;
-    const shadow = {
-      ...s,
-      decisions: s.decisions.filter((x) => x.id !== d.id),
-    };
-    const error = !marketOpen
-      ? "Mercado cerrado"
-      : orderGuard(shadow, d.proposal);
-    if (error) {
-      d.status = "blocked";
-      d.error = error;
-      return null;
-    }
-    d.status = "submitting";
-    d.sentAt = now();
-    return structuredClone(d);
-  });
-  if (intent) {
-    try {
-      const p = intent.proposal;
-      const asset = await alpaca("/v2/assets/" + p.symbol);
-      if (!asset.tradable || asset.status !== "active") {
-        await change((s) => {
-          const d = s.decisions.find((x) => x.id === intent.id)!;
-          d.status = "blocked";
-          d.error = "Activo no negociable";
-        });
-        return;
-      }
-      const order = await alpaca("/v2/orders", "POST", {
-        symbol: p.symbol,
-        qty: String(p.qty),
-        side: p.action,
-        type: "limit",
-        limit_price: p.limitPrice!.toFixed(2),
-        time_in_force: "day",
-        extended_hours: false,
-        client_order_id: intent.id,
-      });
+}
+async function submitStep() {
+  const intent = await change((s) => claimIntent(s, marketOpen));
+  if (!intent) return;
+  try {
+    const p = intent.proposal;
+    const asset = await alpaca("/v2/assets/" + p.symbol);
+    if (!asset.tradable || asset.status !== "active") {
       await change((s) => {
-        const d = s.decisions.find((x) => x.id === intent.id)!;
-        d.status = order.status;
-        d.orderId = order.id;
-        log(s, "order", `Orden enviada a Alpaca Paper: ${p.symbol}`);
+        const d = s.decisions.find((x) => x.id === intent.id);
+        if (!d) return;
+        d.status = "blocked";
+        d.error = "Activo no negociable";
       });
-    } catch {
-      await change((s) => {
-        s.decisions.find((x) => x.id === intent.id)!.status = "unknown";
-        s.paused = true;
-        log(
-          s,
-          "error",
-          "Respuesta de orden incierta; pausa y reconciliación obligatoria.",
-        );
-      });
+      return;
     }
-    return;
-  }
-  // Reserve model work durably before spending tokens. Network calls never lock the panel.
-  const job = await change((s) => {
-    if (s.modelJob) {
+    const order = await alpaca("/v2/orders", "POST", {
+      symbol: p.symbol,
+      qty: String(p.qty),
+      side: p.action,
+      type: "limit",
+      limit_price: limitPriceString(p.limitPrice!),
+      time_in_force: "day",
+      extended_hours: false,
+      client_order_id: intent.id,
+    });
+    await change((s) => {
+      const d = s.decisions.find((x) => x.id === intent.id);
+      if (!d) return;
+      d.status = order.status;
+      d.orderId = order.id;
+      log(s, "order", `Orden enviada a Alpaca Paper: ${p.symbol}`);
+    });
+  } catch {
+    await change((s) => {
+      const d = s.decisions.find((x) => x.id === intent.id);
+      if (d) d.status = "unknown";
+      s.paused = true;
       log(
         s,
         "error",
-        "Evaluación interrumpida recuperada. El intento ya cuenta para el límite diario.",
+        "Respuesta de orden incierta; pausa y reconciliación obligatoria.",
       );
-      s.modelJob = null;
+    });
+  }
+}
+async function brokerStep() {
+  if (configured() && Date.now() - lastSync > 30000) {
+    lastSync = Date.now();
+    try {
+      const state = await read();
+      const x = await snapshot(state.settings.symbols);
+      marketOpen = Boolean(x.clock.is_open);
+      await change((s) => applySnapshot(s, x));
+    } catch {
+      await change((s) => {
+        log(
+          s,
+          "error",
+          "No se pudo sincronizar Alpaca; no se enviarán órdenes con datos obsoletos.",
+        );
+      });
     }
-    if (s.paused || !configured() || !modelConfigured()) return null;
-    const day = now().slice(0, 10);
-    if (s.calls.day !== day) s.calls = { day, count: 0 };
-    if (s.calls.count >= s.settings.maxDailyCalls) return null;
-    if (
-      s.lastDecision &&
-      Date.now() - Date.parse(s.lastDecision) <
-        s.settings.cooldownSeconds * 1000
-    )
-      return null;
-    const due = s.decisions.find(
-      (d) =>
-        !d.review &&
-        (d.reviewAttempts ?? 0) < 3 &&
-        Date.parse(d.reviewAt) <= Date.now(),
-    );
-    const event = s.queue[0];
-    if (!due && !event) return null;
-    s.calls.count++;
-    s.lastDecision = now();
-    if (due) due.reviewAttempts = (due.reviewAttempts ?? 0) + 1;
-    else s.queue.shift();
-    s.modelJob = {
-      id: id(),
-      startedAt: now(),
-      kind: due ? "review" : "decision",
-      targetId: due?.id ?? event.id,
-    };
-    return {
-      meta: s.modelJob,
-      state: structuredClone(s),
-      due: due ? structuredClone(due) : null,
-      event: event?.reason,
-    };
-  });
+  }
+  await reconcileStep();
+  await submitStep();
+}
+// Model calls run here, outside any transaction and outside the market loop.
+async function modelStep() {
+  const job = await change((s) =>
+    claimJob(s, configured() && modelConfigured()),
+  );
   if (!job) return;
   try {
     if (job.due) {
@@ -279,79 +191,11 @@ async function tick() {
           lessons: z.array(lessonSchema).max(3),
         })
         .parse(result.value);
-      await change((s) => {
-        const due = s.decisions.find((d) => d.id === job.due!.id)!;
-        due.review = {
-          at: now(),
-          text: parsed.text,
-          price: due.proposal.symbol
-            ? (job.state.quotes[due.proposal.symbol]?.price ?? null)
-            : null,
-        };
-        for (const l of parsed.lessons)
-          s.lessons.push({
-            ...l,
-            id: id(),
-            status: "proposed",
-            createdAt: now(),
-            decisionId: due.id,
-          });
-        s.usage.push({ at: now(), tokens: result.tokens });
-        s.modelJob = null;
-        log(s, "review", `Revisión completada: ${due.id}`);
-      });
+      await change((s) => applyReview(s, job, parsed, result.tokens));
       return;
     }
     const result = await decide(job.state, job.event!);
-    await change((s) => {
-      const p = result.proposal;
-      const obsolete =
-        s.activeVersion !== job.state.activeVersion ||
-        JSON.stringify(s.settings) !== JSON.stringify(job.state.settings);
-      let error: string | null = null;
-      if (p.action !== "wait")
-        error = obsolete
-          ? "Configuración modificada durante la evaluación"
-          : !marketOpen
-            ? "Mercado cerrado"
-            : orderGuard(s, p);
-      const d = {
-        id: id(),
-        at: now(),
-        versionId: job.state.activeVersion,
-        event: job.event!,
-        input: result.input,
-        proposal: p,
-        status:
-          p.action === "wait" ? "observed" : error ? "blocked" : "pending",
-        error: error ?? undefined,
-        reviewAt: new Date(
-          Date.now() + p.reviewAfterHours * 3600000,
-        ).toISOString(),
-      };
-      s.decisions.push(d);
-      s.usage.push({ at: now(), tokens: result.tokens });
-      if (!obsolete && !s.paused)
-        for (const w of p.watches)
-          if (validWatch(w, s))
-            s.watches.push({
-              ...w,
-              id: id(),
-              status: "active",
-              createdAt: now(),
-              decisionId: d.id,
-            });
-      for (const l of p.lessons)
-        s.lessons.push({
-          ...l,
-          id: id(),
-          status: "proposed",
-          createdAt: now(),
-          decisionId: d.id,
-        });
-      s.modelJob = null;
-      log(s, "decision", `${p.action}: ${p.reason.slice(0, 200)}`);
-    });
+    await change((s) => applyDecision(s, job, result, marketOpen));
   } catch {
     await change((s) => {
       s.modelJob = null;
@@ -363,23 +207,28 @@ async function tick() {
     });
   }
 }
-process.on("SIGTERM", () => {
-  stopping = true;
-  ws?.close();
-});
-process.on("SIGINT", () => {
-  stopping = true;
-  ws?.close();
-});
-console.log("Meridian worker: paper only");
-while (!stopping) {
-  try {
-    await tick();
-  } catch {
-    console.error("Worker tick failed");
+async function loop(name: string, step: () => Promise<void>, waitMs: number) {
+  while (!stopping) {
+    try {
+      await step();
+    } catch {
+      console.error(`Worker ${name} failed`);
+    }
+    await new Promise((r) => setTimeout(r, waitMs));
   }
-  await new Promise((r) => setTimeout(r, 2000));
 }
+function stop() {
+  stopping = true;
+  ws?.close();
+}
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
+console.log("Meridian worker: paper only");
+await Promise.all([
+  loop("market", marketStep, 2000),
+  loop("broker", brokerStep, 2000),
+  loop("model", modelStep, 2000),
+]);
 await lock.query("SELECT pg_advisory_unlock(746391)");
 lock.release();
 await pool.end();

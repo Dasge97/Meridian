@@ -14,10 +14,15 @@ test(
     process.env.APP_ORIGIN = "http://localhost:3000";
     const { migrate, pool, change, read } = await import("../src/db.ts");
     const { initialState, enqueue } = await import("../src/domain.ts");
-    await migrate();
-    await pool.query("UPDATE meridian_state SET data=$1 WHERE id=1", [
+    // Start from the layout of the first release to exercise the migration.
+    await pool.query("DROP TABLE IF EXISTS meridian_state");
+    await pool.query(
+      "CREATE TABLE meridian_state (id integer PRIMARY KEY CHECK (id=1), data jsonb NOT NULL)",
+    );
+    await pool.query("INSERT INTO meridian_state(id,data) VALUES(1,$1)", [
       JSON.stringify(initialState()),
     ]);
+    await migrate();
     const { app } = await import("../src/server.ts");
     try {
       assert.equal(
@@ -143,6 +148,72 @@ test(
         ),
       );
       assert.equal((await read()).queue.length, 10);
+      const outOfLimits = await app.inject({
+        method: "POST",
+        url: "/api/watches",
+        headers,
+        payload: {
+          symbol: "TSLA",
+          operator: "lte",
+          price: 100,
+          expiresAt,
+          reason: "Activo no permitido",
+        },
+      });
+      assert.equal(outOfLimits.statusCode, 400);
+      assert.match(outOfLimits.json().error, /fuera de límites/);
+      const missing = await app.inject({
+        method: "POST",
+        url: `/api/watches/${crypto.randomUUID()}/cancel`,
+        headers,
+      });
+      assert.equal(missing.statusCode, 400);
+      assert.match(missing.json().error, /no existe/);
+      const activate = await app.inject({
+        method: "POST",
+        url: "/api/pause",
+        headers,
+        payload: { paused: false },
+      });
+      assert.equal(activate.statusCode, 400);
+      assert.match(activate.json().error, /claves/);
+      assert.equal(
+        (
+          await app.inject({
+            method: "GET",
+            url: `/api/decisions/${crypto.randomUUID()}`,
+            headers,
+          })
+        ).statusCode,
+        404,
+      );
+      const panel = (
+        await app.inject({ method: "GET", url: "/api/state", headers })
+      ).json();
+      assert.equal(typeof panel.totals.decisions, "number");
+      assert.ok(panel.decisions.every((d: any) => d.input === null));
+      const rows = (
+        await pool.query(
+          "SELECT id, xmin::text, data FROM meridian_state ORDER BY id",
+        )
+      ).rows;
+      assert.equal(rows.length, 2, "el estado se guarda en dos filas");
+      assert.equal(rows[0].data.decisions, undefined);
+      assert.ok(Array.isArray(rows[1].data.decisions));
+      await change((s) => {
+        s.heartbeat = new Date().toISOString();
+      });
+      const after = (
+        await pool.query(
+          "SELECT id, xmin::text FROM meridian_state ORDER BY id",
+        )
+      ).rows;
+      assert.notEqual(
+        after[0].xmin,
+        rows[0].xmin,
+        "la fila caliente se reescribe",
+      );
+      assert.equal(after[1].xmin, rows[1].xmin, "el historial no se reescribe");
       const page = await app.inject({ method: "GET", url: "/" });
       assert.equal(page.statusCode, 200);
       assert.match(page.body, /Meridian/);

@@ -57,7 +57,7 @@ flowchart TD
   J -->|Aprobación del propietario| E
 ```
 
-No hay un cron que decida comprar a una hora concreta. El worker mantiene un WebSocket de operaciones IEX, comprueba condiciones aproximadamente cada 2 segundos y sincroniza la cuenta cada 30 segundos. Esos intervalos son mantenimiento: las llamadas al modelo se activan por eventos o por revisiones pendientes. Durante una llamada al modelo el worker procesa después los eventos recibidos: **no es un sistema de alta frecuencia**.
+No hay un cron que decida comprar a una hora concreta. El worker mantiene un WebSocket de operaciones IEX, comprueba condiciones aproximadamente cada 2 segundos y sincroniza la cuenta cada 30 segundos. Esos intervalos son mantenimiento: las llamadas al modelo se activan por eventos o por revisiones pendientes. Mercado, bróker y modelo corren en bucles separados, así que una llamada al modelo no interrumpe la comprobación de condiciones. Aun así, **no es un sistema de alta frecuencia**.
 
 Las vigilancias siempre **reevalúan**, no ejecutan planes ciegamente. El agente puede comprar, vender o esperar; sus propuestas se validan con Zod y con límites que no puede editar. Cada intención tiene un `client_order_id` estable. Un timeout de envío provoca pausa y reconciliación, nunca un reenvío automático.
 
@@ -146,16 +146,20 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 - El panel muestra patrimonio y posiciones, no atribución contable por estrategia ni comparación con un índice. Cambiar el saldo del simulador afecta la variación mostrada.
 - Memoria contextual y revisión cualitativa: no se ha demostrado rentabilidad ni mejora estadística. La simulación no reproduce todos los costes/ejecuciones reales.
 - La pausa no liquida posiciones ni revoca una petición HTTP ya en vuelo. La cancelación solicita a Alpaca cancelar todas las órdenes de la cuenta; confirma después su estado.
-- Un único propietario y un único worker activo. Persistencia transaccional en un documento JSONB: sencillo para un laboratorio personal, no diseñado para grandes historiales o múltiples usuarios.
+- Un único propietario y un único worker activo. El estado vive en dos filas JSONB de PostgreSQL: sencillo para un laboratorio personal, no pensado para múltiples usuarios.
+- El historial está acotado a propósito: 2.000 decisiones, 1.000 eventos y una curva de patrimonio submuestreada por hora pasados 3 días. El contexto guardado solo se conserva en las 500 decisiones más recientes. Exporta o copia la base de datos si quieres conservarlo todo.
 - Las revisiones vencidas se procesan cuando el agente está activo, con el mismo límite diario y espera mínima. No son revisiones a una hora exacta. Cada revisión admite hasta 3 intentos.
 - No hay motor de ejecución de código generado por IA. El agente solo puede proponer acciones tipadas y vigilancias dentro de los límites.
 
 ## Estructura
 
 ```text
-src/              API, worker, proveedor, conexión Paper y dominio
+src/domain.ts     Esquemas, límites de riesgo y poda del historial
+src/agent.ts      Transiciones de estado del worker, sin entrada/salida
+src/worker.ts     Conexión de mercado, bucles y llamadas a Alpaca
+src/server.ts     API HTTP y panel estático
 web/              Panel React en español, responsive y sin datos ficticios
-tests/            Validaciones de riesgo y pruebas de integración
+tests/            Validaciones de riesgo, transiciones y pruebas de integración
 compose.yaml      PostgreSQL, migración, API y worker
 Dockerfile        Imagen de aplicación con usuario sin privilegios
 docs/             Arquitectura, despliegue y validación

@@ -284,3 +284,92 @@ export function orderGuard(
   }
   return null;
 }
+// Expected conditions the owner can fix. The API answers 400 with the message.
+export class UserError extends Error {}
+// Alpaca accepts 4 decimals below one dollar and 2 at or above it.
+export const limitPriceString = (price: number) =>
+  price < 1 ? price.toFixed(4) : price.toFixed(2);
+// Written on every worker iteration; stays small and bounded.
+export const hotKeys = [
+  "paused",
+  "settings",
+  "activeVersion",
+  "watches",
+  "queue",
+  "quotes",
+  "account",
+  "positions",
+  "orders",
+  "heartbeat",
+  "lastSync",
+  "lastDecision",
+  "calls",
+  "baseline",
+  "stream",
+  "modelJob",
+] as const;
+// History. Large, and only written when something actually happens.
+export const coldKeys = [
+  "versions",
+  "lessons",
+  "decisions",
+  "events",
+  "equity",
+  "usage",
+] as const;
+type Hot = Pick<State, (typeof hotKeys)[number]>;
+type Cold = Pick<State, (typeof coldKeys)[number]>;
+const _exhaustive: Hot & Cold extends State
+  ? State extends Hot & Cold
+    ? true
+    : never
+  : never = true;
+void _exhaustive;
+export const EQUITY_FULL_DAYS = 3,
+  EQUITY_OLD_POINTS = 3000,
+  DECISIONS_KEPT = 2000,
+  DECISION_INPUTS_KEPT = 500,
+  USAGE_KEPT = 2000,
+  CLOSED_WATCHES_KEPT = 500,
+  REJECTED_LESSONS_KEPT = 500;
+// Full resolution for recent days, one point per hour before that.
+export function pruneEquity(points: State["equity"], t = Date.now()) {
+  const cut = t - EQUITY_FULL_DAYS * 86400000;
+  const recent = points.filter((p) => Date.parse(p.at) >= cut);
+  if (recent.length === points.length) return points;
+  const hourly: State["equity"] = [];
+  for (const p of points)
+    if (Date.parse(p.at) < cut) {
+      const last = hourly.at(-1);
+      if (!last || Date.parse(p.at) - Date.parse(last.at) >= 3600000)
+        hourly.push(p);
+    }
+  return [...hourly.slice(-EQUITY_OLD_POINTS), ...recent];
+}
+// Keeps the whole document bounded so every write stays cheap.
+export function prune(s: State, t = Date.now()) {
+  s.events = s.events.slice(0, 1000);
+  s.usage = s.usage.slice(-USAGE_KEPT);
+  s.equity = pruneEquity(s.equity, t);
+  s.decisions = s.decisions.slice(-DECISIONS_KEPT);
+  // The saved model context is the heaviest field; older decisions drop it.
+  for (const d of s.decisions.slice(0, -DECISION_INPUTS_KEPT))
+    if (d.input !== null) d.input = null;
+  const closed = s.watches.filter((w) => w.status !== "active");
+  if (closed.length > CLOSED_WATCHES_KEPT) {
+    const keep = new Set(closed.slice(-CLOSED_WATCHES_KEPT).map((w) => w.id));
+    s.watches = s.watches.filter(
+      (w) => w.status === "active" || keep.has(w.id),
+    );
+  }
+  // Accepted and proposed lessons are referenced by versions and never dropped.
+  const rejected = s.lessons.filter((l) => l.status === "rejected");
+  if (rejected.length > REJECTED_LESSONS_KEPT) {
+    const keep = new Set(
+      rejected.slice(-REJECTED_LESSONS_KEPT).map((l) => l.id),
+    );
+    s.lessons = s.lessons.filter(
+      (l) => l.status !== "rejected" || keep.has(l.id),
+    );
+  }
+}

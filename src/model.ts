@@ -30,27 +30,59 @@ async function completion(messages: unknown[]) {
     tokens: Number(data.usage?.total_tokens) || 0,
   };
 }
+// The prompt must stay within the model window however much memory accumulates.
+export const MAX_CONTEXT_CHARS = 60000,
+  MAX_LESSON_BODY = 1200;
+const size = (x: unknown) => JSON.stringify(x).length;
+const cap = (text: string, chars: number) =>
+  text.length <= chars ? text : text.slice(0, chars) + "…";
 export function context(s: State, event: string) {
   const v = s.versions.find((x) => x.id === s.activeVersion)!;
-  return {
+  const approved = s.lessons.filter((x) => v.lessonIds.includes(x.id));
+  const build = (lessons: number, decisions: number, body: number) => ({
     event,
     at: new Date().toISOString(),
     settings: s.settings,
     account: s.account,
     positions: s.positions,
     quotes: s.quotes,
-    activeWatches: s.watches.filter((x) => x.status === "active"),
-    lessons: s.lessons.filter((x) => v.lessonIds.includes(x.id)),
-    recentDecisions: s.decisions
-      .slice(-8)
-      .map((d) => ({
-        id: d.id,
-        at: d.at,
-        proposal: d.proposal,
-        status: d.status,
-        review: d.review,
-      })),
+    activeWatches: s.watches.filter((x) => x.status === "active").slice(-50),
+    lessonsOmitted: Math.max(0, approved.length - lessons),
+    lessons: approved
+      .slice(-lessons)
+      .map((l) => ({ ...l, body: cap(l.body, body) })),
+    recentDecisions: s.decisions.slice(-decisions).map((d) => ({
+      id: d.id,
+      at: d.at,
+      proposal: d.proposal,
+      status: d.status,
+      review: d.review,
+    })),
+  });
+  // Memory is dropped before market data, oldest first.
+  for (const [lessons, decisions, body] of [
+    [40, 8, MAX_LESSON_BODY],
+    [20, 6, 800],
+    [10, 4, 500],
+    [5, 2, 300],
+    [0, 0, 0],
+  ]) {
+    const input = build(lessons, decisions, body);
+    if (size(input) <= MAX_CONTEXT_CHARS) return input;
+  }
+  return build(0, 0, 0);
+}
+export function reviewContext(s: State, d: Decision) {
+  const shared = {
+    currentQuotes: s.quotes,
+    currentPositions: s.positions,
+    orders: s.orders.slice(0, 20),
   };
+  const full = { decision: d, ...shared };
+  // The saved context is the heaviest field, so it is the first one dropped.
+  return size(full) <= MAX_CONTEXT_CHARS
+    ? full
+    : { decision: { ...d, input: null }, ...shared };
 }
 export async function decide(s: State, event: string) {
   const v = s.versions.find((x) => x.id === s.activeVersion)!;
@@ -107,12 +139,7 @@ export async function review(s: State, d: Decision) {
     },
     {
       role: "user",
-      content: JSON.stringify({
-        decision: d,
-        currentQuotes: s.quotes,
-        currentPositions: s.positions,
-        orders: s.orders,
-      }),
+      content: JSON.stringify(reviewContext(s, d)),
     },
   ]);
   return result;
