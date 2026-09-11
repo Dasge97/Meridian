@@ -1,4 +1,6 @@
 import { proposalSchema, type State, type Decision } from "./domain.ts";
+// Con el análisis en el contexto la respuesta razonada es más larga que antes.
+export const MAX_ANSWER_TOKENS = 8000;
 export const modelConfigured = () =>
   Boolean(process.env.LLM_API_KEY && process.env.LLM_MODEL);
 async function completion(messages: unknown[]) {
@@ -16,15 +18,21 @@ async function completion(messages: unknown[]) {
       model: process.env.LLM_MODEL,
       messages,
       response_format: { type: "json_object" },
-      max_completion_tokens: 3000,
+      max_completion_tokens: MAX_ANSWER_TOKENS,
     }),
     signal: AbortSignal.timeout(45000),
   });
   if (!r.ok) throw new Error(`Modelo HTTP ${r.status}`);
   const data: any = await r.json();
-  const content = data.choices?.[0]?.message?.content;
+  const choice = data.choices?.[0];
+  // Un JSON cortado a la mitad falla luego en el esquema con un error confuso.
+  if (choice?.finish_reason === "length")
+    throw new Error(
+      "el modelo agotó su límite de tokens antes de cerrar la respuesta",
+    );
+  const content = choice?.message?.content;
   if (typeof content !== "string" || content.length > 50000)
-    throw new Error("Respuesta del modelo no válida");
+    throw new Error("el modelo no devolvió texto utilizable");
   return {
     value: JSON.parse(content),
     tokens: Number(data.usage?.total_tokens) || 0,

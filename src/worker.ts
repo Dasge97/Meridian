@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import { z } from "zod";
+import { describeFailure } from "./worker-failures.ts";
 import { pool, change, read } from "./db.ts";
 import { alpaca, configured, snapshot, dailyBars } from "./alpaca.ts";
 import { decide, review, modelConfigured } from "./model.ts";
@@ -216,13 +217,16 @@ async function modelStep() {
     }
     const result = await decide(job.state, job.event!);
     await change((s) => applyDecision(s, job, result, marketOpen));
-  } catch {
+  } catch (e) {
+    // Sin el motivo concreto no hay forma de saber si falló el proveedor, si
+    // tardó demasiado o si la respuesta no cumplía el esquema.
+    const motivo = describeFailure(e);
     await change((s) => {
       s.modelJob = null;
       log(
         s,
         "error",
-        "Falló la evaluación del modelo o su esquema. El intento cuenta para el límite diario. Puedes solicitar otra reevaluación. Las revisiones se intentan como máximo 3 veces.",
+        `Falló la evaluación: ${motivo}. El intento cuenta para el límite diario. Puedes solicitar otra reevaluación. Las revisiones se intentan como máximo 3 veces.`,
       );
     });
   }

@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { alpaca, PAPER, AlpacaError } from "../src/alpaca.ts";
 import { decide } from "../src/model.ts";
-import { initialState } from "../src/domain.ts";
+import { initialState, proposalSchema } from "../src/domain.ts";
+import { describeFailure } from "../src/worker-failures.ts";
 import { analyse } from "../src/market.ts";
 test("Broker requests cannot select a live endpoint; provider errors retain status", async () => {
   process.env.ALPACA_KEY_ID = "test-key";
@@ -112,4 +113,42 @@ test("Agent receives approved memory and emits validated structured decisions", 
   } finally {
     globalThis.fetch = original;
   }
+});
+test("A truncated answer is reported as such, not as a schema error", async () => {
+  process.env.LLM_API_KEY = "test-key";
+  process.env.LLM_MODEL = "test-model";
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            { finish_reason: "length", message: { content: '{"action":"wa' } },
+          ],
+        }),
+      );
+    await assert.rejects(
+      () => decide(initialState(), "test"),
+      (e: unknown) =>
+        e instanceof Error && /agotó su límite de tokens/.test(e.message),
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("Failures are described so the log says what actually went wrong", () => {
+  const schemaError = (() => {
+    try {
+      proposalSchema.parse({ action: "comprar todo" });
+      return null;
+    } catch (e) {
+      return e;
+    }
+  })();
+  assert.match(describeFailure(schemaError), /no cumple el esquema/);
+  assert.match(describeFailure(new Error("Modelo HTTP 429")), /HTTP 429/);
+  const timeout = new Error("The operation was aborted");
+  timeout.name = "TimeoutError";
+  assert.match(describeFailure(timeout), /no respondió a tiempo/);
+  assert.equal(describeFailure("x".repeat(500)).length, 300);
 });
