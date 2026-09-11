@@ -94,6 +94,24 @@ test("HTTP security: login, signed cookies, route protection, Origin and static 
       headers,
     });
     assert.equal(logout.statusCode, 200);
+    let limited = 0;
+    for (let i = 0; i < 8 && !limited; i++) {
+      const r = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers: { origin: process.env.APP_ORIGIN! },
+        payload: { password: "wrong" },
+      });
+      if (r.statusCode !== 401) limited = r.statusCode;
+    }
+    assert.equal(limited, 429, "el límite de intentos debe decir 429, no 500");
+    const malformed = await app.inject({
+      method: "POST",
+      url: "/api/wake",
+      headers: { ...headers, "content-type": "application/json" },
+      payload: "",
+    });
+    assert.equal(malformed.statusCode, 400);
   } finally {
     await app.close();
     await pool.end();

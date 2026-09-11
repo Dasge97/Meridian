@@ -93,6 +93,14 @@ app.setErrorHandler((e, req, reply) => {
       error: "Datos no válidos",
       details: e.issues.map((x) => ({ path: x.path, message: x.message })),
     });
+  // Fastify ya clasifica los fallos de la petición: límite de peticiones
+  // superado, cuerpo mal formado, método no permitido. Su código y su mensaje
+  // están dirigidos a quien llama, así que se respetan en lugar de esconderlos.
+  const status = (e as { statusCode?: unknown }).statusCode;
+  if (typeof status === "number" && status >= 400 && status < 500)
+    return reply
+      .code(status)
+      .send({ error: e instanceof Error ? e.message : "Petición no válida" });
   req.log.error(
     { message: e instanceof Error ? e.message : "Unknown error" },
     "Request failed",
