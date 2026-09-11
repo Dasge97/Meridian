@@ -214,6 +214,23 @@ test(
         "la fila caliente se reescribe",
       );
       assert.equal(after[1].xmin, rows[1].xmin, "el historial no se reescribe");
+      // Un estado guardado antes de que existiera un campo debe seguir leyéndose.
+      await pool.query(
+        "UPDATE meridian_state SET data = data - 'stories' - 'analysis' WHERE id=2",
+      );
+      await pool.query(
+        "UPDATE meridian_state SET data = data - 'feeds' - 'lastNotice' WHERE id=1",
+      );
+      const recuperado = await read();
+      assert.deepEqual(recuperado.stories, [], "un campo ausente vuelve vacío");
+      assert.deepEqual(recuperado.analysis, {});
+      assert.deepEqual(recuperado.feeds, { trades: true, clock: true });
+      assert.equal(recuperado.lastNotice, null);
+      assert.equal(
+        recuperado.decisions.length,
+        (await read()).decisions.length,
+        "lo que sí estaba guardado no se pierde",
+      );
       const page = await app.inject({ method: "GET", url: "/" });
       assert.equal(page.statusCode, 200);
       assert.match(page.body, /Meridian/);

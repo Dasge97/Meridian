@@ -60,10 +60,12 @@ export async function migrate() {
   }
 }
 function assemble(rows: { id: number; data: any }[]): State {
-  const s = Object.assign({}, ...rows.map((r) => r.data));
   if (!rows.some((r) => r.id === HOT) || !rows.some((r) => r.id === COLD))
     throw new Error("Estado incompleto: ejecuta la migración");
-  return s;
+  // Un estado guardado antes de que existiera un campo no lo trae. Partir de los
+  // valores iniciales hace que cualquier campo nuevo aparezca ya con su valor
+  // por defecto, sin migrar nada a mano.
+  return Object.assign({}, initialState(), ...rows.map((r) => r.data));
 }
 export async function read(): Promise<State> {
   return assemble(
