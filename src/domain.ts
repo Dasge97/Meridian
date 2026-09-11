@@ -114,6 +114,7 @@ export type State = {
   baseline: number | null;
   stream: string;
   feeds: { trades: boolean; clock: boolean };
+  market: { open: boolean; nextOpen: string | null; nextClose: string | null };
   analysis: Record<string, Analysis>;
   stories: Story[];
   lastNotice: { at: string; kind: string } | null;
@@ -167,6 +168,7 @@ export function initialState(): State {
     baseline: null,
     stream: "disconnected",
     feeds: { trades: true, clock: true },
+    market: { open: false, nextOpen: null, nextClose: null },
     analysis: {},
     stories: [],
     lastNotice: null,
@@ -354,6 +356,7 @@ export const hotKeys = [
   "baseline",
   "stream",
   "feeds",
+  "market",
   "lastNotice",
   "modelJob",
 ] as const;

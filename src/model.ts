@@ -62,6 +62,7 @@ export function context(s: State, event: string) {
     event,
     at: new Date().toISOString(),
     settings: s.settings,
+    market: s.market,
     account: s.account,
     positions: s.positions,
     quotes: s.quotes,

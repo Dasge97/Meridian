@@ -381,3 +381,29 @@ test("Removing an asset from the list also drops its stale price", () => {
   assert.ok(s.quotes.AAPL, "un activo permitido se conserva");
   assert.equal(s.quotes.MSFT, undefined, "un activo retirado no deja precio");
 });
+test("The agent is told whether the market is open and when it reopens", () => {
+  const s = state();
+  assert.equal(s.market.open, false);
+  applySnapshot(s, {
+    account: { equity: "100000", cash: "100000", status: "ACTIVE" },
+    positions: [],
+    orders: [],
+    trades: null,
+    clock: {
+      is_open: true,
+      next_open: "2026-09-14T13:30:00Z",
+      next_close: "2026-09-11T20:00:00Z",
+    },
+  });
+  assert.equal(s.market.open, true);
+  assert.equal(s.market.nextOpen, "2026-09-14T13:30:00Z");
+  // Sin calendario se conserva lo último que se supo, en vez de inventarlo.
+  applySnapshot(s, {
+    account: { equity: "100000", cash: "100000", status: "ACTIVE" },
+    positions: [],
+    orders: [],
+    trades: null,
+    clock: null,
+  });
+  assert.equal(s.market.open, true);
+});

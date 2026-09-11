@@ -65,6 +65,10 @@ export function decisionNotice(
   t = Date.now(),
 ): Notice | null {
   const p = d.proposal;
+  // Que la bolsa esté cerrada no es un fallo ni algo que el propietario pueda
+  // arreglar. Además, avisar aquí sería engañoso: la cabecera anunciaría una
+  // compra que no ha ocurrido.
+  if (d.error === "Mercado cerrado") return null;
   const opera = p.action !== "wait";
   const bloqueada = Boolean(d.error);
   // Operar o quedarse con las ganas siempre se cuenta. Esperar, solo de vez en

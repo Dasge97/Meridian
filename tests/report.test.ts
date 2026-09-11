@@ -422,3 +422,24 @@ test("A news comment stays short enough to read on a phone", () => {
     }),
   );
 });
+test("A closed market is not a problem worth interrupting the owner", () => {
+  const s = state();
+  // El agente propuso comprar un sábado. No es un fallo que el dueño pueda
+  // arreglar, y avisar diría COMPRA de una compra que nunca ocurrió.
+  const cerrado = decision({ status: "blocked", error: "Mercado cerrado" });
+  assert.equal(decisionNotice(s, cerrado), null);
+  const esperando = decision({
+    proposal: proposal({
+      action: "wait",
+      symbol: null,
+      qty: null,
+      limitPrice: null,
+    }),
+    status: "blocked",
+    error: "Mercado cerrado",
+  });
+  assert.equal(decisionNotice(s, esperando), null);
+  // Cualquier otro bloqueo sí se cuenta, porque dice algo de los límites.
+  const saldo = decision({ status: "blocked", error: "Saldo insuficiente" });
+  assert.match(decisionNotice(s, saldo)!.text, /NO SE ENVIÓ/);
+});

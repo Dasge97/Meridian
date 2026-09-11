@@ -44,6 +44,8 @@ No hay datos fundamentales ni de resultados empresariales.
 
 Un bot de Telegram escribe cuando pasa algo que merece interrumpir: una compra, una venta, una orden que se ejecuta o la rechazan, una propuesta que los límites bloquean, y cualquier problema que deje al agente pausado. Los estados intermedios de una orden no se cuentan.
 
+Una propuesta bloqueada porque la bolsa está cerrada no se cuenta: no es un fallo que el propietario pueda arreglar, y el aviso anunciaría una compra que no ha ocurrido.
+
 Seguir esperando se cuenta solo si el propio agente marca que hay algo nuevo, y como mucho una vez cada 4 horas. Sin ese freno el bot repetiría lo mismo varias veces por hora.
 
 El agente escribe el texto del aviso en su propia respuesta, en un campo aparte del razonamiento técnico. No cuesta una llamada extra al modelo.
@@ -56,7 +58,7 @@ El bot solo informa. No acepta órdenes, así que nadie puede tocar el agente de
 
 Se reserva el trabajo y se incrementa el contador diario antes de llamar al modelo. La llamada se realiza fuera de las transacciones de PostgreSQL, por lo que el panel puede pausar o cambiar parámetros durante una evaluación. Al terminar se revisan configuración, versión, pausa y límites; una propuesta obsoleta no se envía.
 
-Se acepta únicamente JSON validado. El contexto incluye cartera, precios, el análisis por activo, las noticias recientes, límites, vigilancias, lecciones de la versión activa y las últimas 8 decisiones. Una respuesta cortada por el límite de tokens se detecta al recibirla y se explica como tal, en lugar de fallar después como JSON mal formado. Su tamaño está acotado a 60.000 caracteres: si la memoria aprobada crece por encima, se recortan primero las lecciones más antiguas y el cuerpo de cada una, después el número de decisiones recientes, y por último las velas en crudo. Los indicadores calculados no se quitan nunca: ocupan poco y son lo que sustituye al histórico completo. El contexto indica cuántas lecciones se han omitido. No hay búsqueda vectorial ni navegación web autónoma. La fuente de una lección externa es una referencia aportada por el usuario, no una página descargada ni verificada automáticamente.
+Se acepta únicamente JSON validado. El contexto incluye cartera, precios, si la bolsa está abierta y cuándo vuelve a abrir, el análisis por activo, las noticias recientes, límites, vigilancias, lecciones de la versión activa y las últimas 8 decisiones. Una respuesta cortada por el límite de tokens se detecta al recibirla y se explica como tal, en lugar de fallar después como JSON mal formado. Su tamaño está acotado a 60.000 caracteres: si la memoria aprobada crece por encima, se recortan primero las lecciones más antiguas y el cuerpo de cada una, después el número de decisiones recientes, y por último las velas en crudo. Los indicadores calculados no se quitan nunca: ocupan poco y son lo que sustituye al histórico completo. El contexto indica cuántas lecciones se han omitido. No hay búsqueda vectorial ni navegación web autónoma. La fuente de una lección externa es una referencia aportada por el usuario, no una página descargada ni verificada automáticamente.
 
 Las revisiones posteriores reciben decisión, cotizaciones disponibles, posiciones y las 20 órdenes más recientes, con el mismo tope de tamaño. Sus lecciones quedan propuestas hasta aprobación del propietario. Una aprobación o rechazo crea una versión de memoria/instrucciones. Recuperar una versión restaura sus lecciones activas.
 

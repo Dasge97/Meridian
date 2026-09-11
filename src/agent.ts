@@ -26,7 +26,11 @@ export type Snapshot = {
   positions: any[];
   orders: any[];
   trades: { trades?: Record<string, any> } | null;
-  clock: { is_open?: boolean } | null;
+  clock: {
+    is_open?: boolean;
+    next_open?: string;
+    next_close?: string;
+  } | null;
 };
 export const EQUITY_SAMPLE_MS = 300000,
   STREAM_SILENCE_MS = 120000;
@@ -35,6 +39,14 @@ export function applySnapshot(s: State, x: Snapshot, t = Date.now()) {
   s.positions = x.positions;
   s.orders = x.orders;
   s.lastSync = new Date(t).toISOString();
+  // El agente necesita saber si el mercado está abierto: si no, proponer una
+  // compra es tirar una evaluación, porque los límites la bloquean después.
+  if (x.clock)
+    s.market = {
+      open: Boolean(x.clock.is_open),
+      nextOpen: x.clock.next_open ?? null,
+      nextClose: x.clock.next_close ?? null,
+    };
   if (s.baseline === null) s.baseline = Number(x.account.equity);
   for (const [symbol, trade] of Object.entries(x.trades?.trades ?? {}))
     if (trade?.p > 0) s.quotes[symbol] = { price: trade.p, at: trade.t };
