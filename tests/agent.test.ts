@@ -368,3 +368,14 @@ test("A missing price or calendar feed still syncs the account and warns once", 
   assert.equal(s.quotes.AAPL.price, 205);
   assert.equal(s.events.length, 4, "también se avisa de la recuperación");
 });
+test("Removing an asset from the list also drops its stale price", () => {
+  const s = state();
+  s.quotes.MSFT = { price: 495, at: now() };
+  applyMarket(s, {}, true, Date.now());
+  assert.ok(s.quotes.MSFT, "mientras está permitido, su precio se conserva");
+  // El propietario lo quita de la lista desde Configuración.
+  s.settings.symbols = ["SPY", "AAPL"];
+  applyMarket(s, {}, true, Date.now());
+  assert.ok(s.quotes.AAPL, "un activo permitido se conserva");
+  assert.equal(s.quotes.MSFT, undefined, "un activo retirado no deja precio");
+});

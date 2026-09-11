@@ -94,6 +94,10 @@ export function applyMarket(
       (!s.quotes[symbol] || Date.parse(q.at) > Date.parse(s.quotes[symbol].at))
     )
       s.quotes[symbol] = q;
+  // Al quitar un activo de la lista su último precio deja de actualizarse. Si se
+  // queda guardado, el agente lo sigue viendo en su contexto cada vez más viejo.
+  for (const symbol of Object.keys(s.quotes))
+    if (!s.settings.symbols.includes(symbol)) delete s.quotes[symbol];
   for (const w of s.watches) {
     const next = watchState(w, s.paused ? undefined : s.quotes[w.symbol], t);
     if (next !== w.status) {
