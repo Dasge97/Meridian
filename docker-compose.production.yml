@@ -1,0 +1,53 @@
+name: meridian
+x-app: &app
+  build: .
+  image: meridian:production
+  env_file:
+    - ../runtime.env
+  restart: unless-stopped
+  init: true
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  read_only: true
+  tmpfs: [/tmp]
+services:
+  db:
+    image: postgres:17-bookworm
+    env_file:
+      - ../runtime.env
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meridian -d meridian"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    <<: *app
+    command: ["npm", "run", "migrate"]
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+  api:
+    <<: *app
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  worker:
+    <<: *app
+    command: ["npm", "run", "worker"]
+    stop_grace_period: 70s
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+volumes:
+  postgres:

@@ -5,3 +5,4 @@ dist/
 !.env.example
 backups/
 *.log
+README_DEPLOY.md
