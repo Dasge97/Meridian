@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Analysis } from "./market.ts";
 export const settingsSchema = z.object({
   symbols: z
     .array(z.string().regex(/^[A-Z]{1,5}$/))
@@ -98,6 +99,7 @@ export type State = {
   baseline: number | null;
   stream: string;
   feeds: { trades: boolean; clock: boolean };
+  analysis: Record<string, Analysis>;
   usage: { at: string; tokens: number }[];
   modelJob?: {
     id: string;
@@ -148,6 +150,7 @@ export function initialState(): State {
     baseline: null,
     stream: "disconnected",
     feeds: { trades: true, clock: true },
+    analysis: {},
     usage: [],
   };
 }
@@ -319,6 +322,7 @@ export const coldKeys = [
   "events",
   "equity",
   "usage",
+  "analysis",
 ] as const;
 type Hot = Pick<State, (typeof hotKeys)[number]>;
 type Cold = Pick<State, (typeof coldKeys)[number]>;

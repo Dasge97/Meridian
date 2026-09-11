@@ -12,6 +12,7 @@ import {
   type proposalSchema,
 } from "./domain.ts";
 import type { z } from "zod";
+import type { Analysis } from "./market.ts";
 // Worker state transitions, kept free of I/O so they can be tested directly.
 export type Job = {
   meta: NonNullable<State["modelJob"]>;
@@ -253,4 +254,32 @@ export function applyReview(
   s.modelJob = null;
   log(s, "review", `Revisión completada: ${due.id}`);
   return due;
+}
+
+// El analisis se recalcula cada pocos minutos y solo se guarda si cambia algo.
+export function applyAnalysis(
+  s: State,
+  fresh: Record<string, Analysis>,
+  t = Date.now(),
+) {
+  const before = JSON.stringify(s.analysis);
+  const kept: Record<string, Analysis> = {};
+  for (const symbol of s.settings.symbols) {
+    const next = fresh[symbol] ?? s.analysis[symbol];
+    if (next) kept[symbol] = next;
+  }
+  s.analysis = kept;
+  if (before !== JSON.stringify(s.analysis)) {
+    const discarded = Object.values(fresh).reduce(
+      (a, x) => a + x.barsDiscarded,
+      0,
+    );
+    if (discarded)
+      log(
+        s,
+        "market",
+        `Analisis actualizado. Se descartaron ${discarded} velas con datos imposibles.`,
+      );
+  }
+  void t;
 }

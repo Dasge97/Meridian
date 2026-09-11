@@ -46,3 +46,22 @@ export async function snapshot(symbols: string[]) {
   ]);
   return { account, positions, orders, trades, clock };
 }
+// Velas diarias consolidadas. El feed sip cubre todo el mercado; el feed iex del
+// WebSocket solo ve su propio parqué y sirve para el precio del momento, no para
+// medir tendencia o volumen.
+export const HISTORY_DAYS = 400;
+export async function dailyBars(symbols: string[], days = HISTORY_DAYS) {
+  const start = new Date(Date.now() - days * 86400000)
+    .toISOString()
+    .slice(0, 10);
+  const query = new URLSearchParams({
+    symbols: symbols.join(","),
+    timeframe: "1Day",
+    limit: "10000",
+    start,
+    feed: "sip",
+    adjustment: "split",
+  });
+  const r = await alpaca("/v2/stocks/bars?" + query, "GET", undefined, true);
+  return (r?.bars ?? {}) as Record<string, unknown[]>;
+}

@@ -1,10 +1,12 @@
 import WebSocket from "ws";
 import { z } from "zod";
 import { pool, change, read } from "./db.ts";
-import { alpaca, configured, snapshot } from "./alpaca.ts";
+import { alpaca, configured, snapshot, dailyBars } from "./alpaca.ts";
 import { decide, review, modelConfigured } from "./model.ts";
 import { log, lessonSchema, limitPriceString, type Quote } from "./domain.ts";
+import { analyse, type Analysis } from "./market.ts";
 import {
+  applyAnalysis,
   applyMarket,
   applySnapshot,
   claimIntent,
@@ -21,6 +23,7 @@ let stopping = false,
   ws: WebSocket | undefined,
   retryAt = 0,
   lastSync = 0,
+  lastAnalysis = 0,
   lastTick = 0,
   streamSymbols = "",
   marketOpen = false;
@@ -155,6 +158,23 @@ async function submitStep() {
     });
   }
 }
+// Velas diarias e indicadores. Cambian despacio, asi que se piden cada 5 minutos.
+export const ANALYSIS_EVERY_MS = 300000;
+async function analysisStep() {
+  if (!configured() || Date.now() - lastAnalysis < ANALYSIS_EVERY_MS) return;
+  lastAnalysis = Date.now();
+  const state = await read();
+  const symbols = state.settings.symbols;
+  if (!symbols.length) return;
+  const raw = await dailyBars(symbols);
+  const fresh: Record<string, Analysis> = {};
+  for (const symbol of symbols) {
+    const price = state.quotes[symbol]?.price ?? 0;
+    const bars = raw[symbol] ?? [];
+    if (bars.length) fresh[symbol] = analyse(bars, price, "alpaca sip 1Day");
+  }
+  if (Object.keys(fresh).length) await change((s) => applyAnalysis(s, fresh));
+}
 async function brokerStep() {
   if (configured() && Date.now() - lastSync > 30000) {
     lastSync = Date.now();
@@ -228,6 +248,7 @@ await Promise.all([
   loop("market", marketStep, 2000),
   loop("broker", brokerStep, 2000),
   loop("model", modelStep, 2000),
+  loop("analysis", analysisStep, 10000),
 ]);
 await lock.query("SELECT pg_advisory_unlock(746391)");
 lock.release();

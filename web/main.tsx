@@ -273,6 +273,7 @@ function App() {
         <nav aria-label="Navegación principal">
           {[
             "Resumen",
+            "Mercado",
             "Decisiones",
             "Vigilancias",
             "Aprendizaje",
@@ -283,7 +284,7 @@ function App() {
               onClick={() => setTab(name)}
               className={tab === name ? "current" : ""}
             >
-              <span>{["◈", "≡", "◎", "◇", "⚙"][i]}</span>
+              <span>{["◈", "⌁", "≡", "◎", "◇", "⚙"][i]}</span>
               {name}
               {name === "Vigilancias" && <small>{active.length}</small>}
             </button>
@@ -319,6 +320,7 @@ function App() {
                 {String(
                   [
                     "Resumen",
+                    "Mercado",
                     "Decisiones",
                     "Vigilancias",
                     "Aprendizaje",
@@ -332,6 +334,8 @@ function App() {
                   (
                     {
                       Resumen: "Observa sus decisiones. Entiende su evolución.",
+                      Mercado:
+                        "Los mismos datos que recibe el agente para decidir.",
                       Decisiones:
                         "Cada hipótesis, su contexto y lo que ocurrió después.",
                       Vigilancias:
@@ -544,6 +548,120 @@ function App() {
               </section>
             </>
           )}
+          {tab === "Mercado" && (
+            <>
+              {!Object.keys(s.analysis || {}).length ? (
+                <section className="panel">
+                  <Empty>
+                    El análisis aparecerá tras la primera descarga de velas
+                    diarias. El worker la repite cada cinco minutos.
+                  </Empty>
+                </section>
+              ) : (
+                s.settings.symbols.map((symbol) => {
+                  const a = s.analysis[symbol];
+                  if (!a) return null;
+                  const i = a.indicators;
+                  const filas: [string, string][] = i
+                    ? [
+                        ["Precio", money(i.price)],
+                        ["Media de 20 sesiones", money(i.sma20)],
+                        ["Media de 50 sesiones", money(i.sma50)],
+                        ["Media de 200 sesiones", money(i.sma200)],
+                        [
+                          "Distancia a la media de 20",
+                          i.distanceToSma20Pct === null
+                            ? "—"
+                            : `${i.distanceToSma20Pct} %`,
+                        ],
+                        [
+                          "Variación en 1 sesión",
+                          i.changePct1d === null ? "—" : `${i.changePct1d} %`,
+                        ],
+                        [
+                          "Variación en 5 sesiones",
+                          i.changePct5d === null ? "—" : `${i.changePct5d} %`,
+                        ],
+                        [
+                          "Variación en 20 sesiones",
+                          i.changePct20d === null ? "—" : `${i.changePct20d} %`,
+                        ],
+                        [
+                          "Movimiento diario habitual",
+                          i.atr14Pct === null
+                            ? "—"
+                            : `${money(i.atr14)} (${i.atr14Pct} %)`,
+                        ],
+                        ["Máximo de 52 semanas", money(i.high52w)],
+                        ["Mínimo de 52 semanas", money(i.low52w)],
+                        [
+                          "Posición en ese rango",
+                          i.positionIn52wRangePct === null
+                            ? "—"
+                            : `${i.positionIn52wRangePct} %`,
+                        ],
+                        [
+                          "Volumen frente a su media",
+                          i.volumeRatio20 === null
+                            ? "—"
+                            : `${i.volumeRatio20} veces`,
+                        ],
+                      ]
+                    : [];
+                  return (
+                    <section className="panel" key={symbol}>
+                      <div className="section-title">
+                        <h2>{symbol}</h2>
+                        <span className="muted">
+                          {a.barsUsed} sesiones · calculado {date(a.at)}
+                        </span>
+                      </div>
+                      {a.today && (
+                        <p className="muted">
+                          Sesión en curso: abrió en {money(a.today.open)},
+                          máximo {money(a.today.high)}, mínimo{" "}
+                          {money(a.today.low)}, cierre anterior{" "}
+                          {money(a.today.prevClose)}
+                          {a.today.changePct === null
+                            ? ""
+                            : ` (${a.today.changePct} %)`}
+                          .
+                        </p>
+                      )}
+                      {!i ? (
+                        <Empty>
+                          Sin sesiones suficientes para calcular indicadores.
+                        </Empty>
+                      ) : (
+                        <div className="table-wrap">
+                          <table>
+                            <tbody>
+                              {filas.map(([k, v]) => (
+                                <tr key={k}>
+                                  <td>{k}</td>
+                                  <td>
+                                    <strong>{v}</strong>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                      {a.barsDiscarded > 0 && (
+                        <p className="muted source">
+                          Se descartaron {a.barsDiscarded} sesiones porque el
+                          proveedor las dio con datos imposibles. No entran en
+                          ningún cálculo.
+                        </p>
+                      )}
+                      <p className="muted source">Origen: {a.source}</p>
+                    </section>
+                  );
+                })
+              )}
+            </>
+          )}
           {tab === "Decisiones" && (
             <section className="panel">
               <div className="section-title">
@@ -680,6 +798,27 @@ function App() {
                       {w.operator === "lte" ? "≤" : "≥"} {money(w.price)}
                     </div>
                     <p>{w.reason}</p>
+                    <p className="muted source">
+                      {w.decisionId ? (
+                        <button
+                          className="link"
+                          onClick={() => {
+                            const d = s.decisions.find(
+                              (x) => x.id === w.decisionId,
+                            );
+                            if (d) setSelected(d);
+                            else
+                              setError(
+                                "La decisión que creó esta vigilancia ya no está en el historial reciente.",
+                              );
+                          }}
+                        >
+                          Creada por el agente · ver su decisión ↗
+                        </button>
+                      ) : (
+                        "Creada por ti desde el panel"
+                      )}
+                    </p>
                     <dl>
                       <div>
                         <dt>Último precio</dt>
@@ -1077,6 +1216,71 @@ function App() {
               </div>
             </dl>
             {selected.error && <p className="error">{selected.error}</p>}
+            <h3>
+              Vigilancias que dejó puestas
+              {selected.proposal.watches.length > 0 &&
+                ` (${selected.proposal.watches.length})`}
+            </h3>
+            {!selected.proposal.watches.length ? (
+              <p className="muted">
+                En esta decisión no pidió vigilar ninguna condición de precio.
+              </p>
+            ) : (
+              selected.proposal.watches.map((w, i) => {
+                const guardada = s.watches.find(
+                  (x) =>
+                    x.decisionId === selected.id &&
+                    x.symbol === w.symbol &&
+                    x.price === w.price &&
+                    x.operator === w.operator,
+                );
+                return (
+                  <div className="event" key={i}>
+                    <p>
+                      <strong>
+                        {w.symbol} {w.operator === "lte" ? "≤" : "≥"}{" "}
+                        {money(w.price)}
+                      </strong>
+                      <br />
+                      {w.reason}
+                      <br />
+                      <small>
+                        Caduca {date(w.expiresAt)}
+                        {w.invalidateBelow
+                          ? ` · se invalida por debajo de ${money(w.invalidateBelow)}`
+                          : ""}
+                        {w.invalidateAbove
+                          ? ` · se invalida por encima de ${money(w.invalidateAbove)}`
+                          : ""}
+                      </small>
+                    </p>
+                    {guardada ? (
+                      <Badge value={guardada.status} />
+                    ) : (
+                      <span className="muted">
+                        <small>Fuera de límites, no se guardó</small>
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+            )}
+            <h3>Lecciones que propuso</h3>
+            {!selected.proposal.lessons.length ? (
+              <p className="muted">
+                En esta decisión no propuso ninguna lección.
+              </p>
+            ) : (
+              selected.proposal.lessons.map((l, i) => (
+                <div className="event" key={i}>
+                  <p>
+                    <strong>{l.title}</strong>
+                    <br />
+                    {l.body}
+                  </p>
+                </div>
+              ))
+            )}
             <h3>Revisión posterior</h3>
             <p className="preserve">
               {selected.review?.text || "Pendiente: " + date(selected.reviewAt)}
