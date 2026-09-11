@@ -7,6 +7,7 @@ import {
   proposalSchema,
   watchSchema,
   validWatch,
+  watchProblem,
   now,
   id,
 } from "../src/domain.ts";
@@ -139,4 +140,44 @@ test("Model output is structured, finite and bounded", () => {
     proposalSchema.parse({ ...proposal(), limitPrice: Infinity }),
   );
   assert.throws(() => proposalSchema.parse({ ...proposal(), action: "shell" }));
+});
+test("The same condition is not watched twice, and the reason is explicit", () => {
+  const s = state();
+  const w = watch();
+  assert.equal(watchProblem(w, s), null);
+  s.watches.push(w);
+  assert.match(watchProblem(w, s)!, /ya se está vigilando/);
+  // Distinto precio, distinto operador o distinto activo sí se admiten.
+  assert.equal(watchProblem({ ...w, price: 195 }, s), null);
+  assert.equal(watchProblem({ ...w, operator: "gte" }, s), null);
+  // Una vigilancia ya cerrada no bloquea volver a poner la misma condición.
+  s.watches[0].status = "triggered";
+  assert.equal(watchProblem(w, s), null);
+});
+test("Each watch rejection says what is wrong", () => {
+  const s = state();
+  assert.match(
+    watchProblem({ ...watch(), symbol: "TSLA" }, s)!,
+    /no está en la lista/,
+  );
+  assert.match(
+    watchProblem({ ...watch(), expiresAt: "2020-01-01T00:00:00Z" }, s)!,
+    /futura/,
+  );
+  assert.match(
+    watchProblem(
+      {
+        ...watch(),
+        expiresAt: new Date(Date.now() + 40 * 86400000).toISOString(),
+      },
+      s,
+    )!,
+    /30 días/,
+  );
+  s.watches = Array.from({ length: 50 }, (_, i) => ({
+    ...watch(),
+    id: id(),
+    price: 100 + i,
+  }));
+  assert.match(watchProblem(watch(), s)!, /50 vigilancias/);
 });

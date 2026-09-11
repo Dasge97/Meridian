@@ -20,7 +20,7 @@ import {
   now,
   log,
   enqueue,
-  validWatch,
+  watchProblem,
   UserError,
 } from "./domain.ts";
 import { configured, alpaca, AlpacaError } from "./alpaca.ts";
@@ -208,10 +208,8 @@ app.put("/api/settings", async (req) => {
 app.post("/api/watches", async (req) => {
   const w = watchSchema.parse(req.body);
   await change((s) => {
-    if (!validWatch(w, s))
-      throw new UserError(
-        "Vigilancia fuera de límites: revisa activo, caducidad (máximo 30 días) y número de vigilancias",
-      );
+    const problema = watchProblem(w, s);
+    if (problema) throw new UserError(problema);
     s.watches.push({ ...w, id: id(), status: "active", createdAt: now() });
     log(s, "watch", `Vigilancia manual: ${w.symbol}`);
   });

@@ -186,14 +186,37 @@ export function watchState(
     ? "triggered"
     : "active";
 }
-export function validWatch(w: z.infer<typeof watchSchema>, s: State) {
-  return (
-    s.settings.symbols.includes(w.symbol) &&
-    Date.parse(w.expiresAt) > Date.now() &&
-    Date.parse(w.expiresAt) < Date.now() + 30 * 86400000 &&
-    s.watches.filter((x) => x.status === "active").length < 50
-  );
+// Devuelve el motivo del rechazo, o null si la vigilancia se puede guardar.
+export function watchProblem(
+  w: z.infer<typeof watchSchema>,
+  s: State,
+  t = Date.now(),
+): string | null {
+  if (!s.settings.symbols.includes(w.symbol))
+    return "Ese activo no está en la lista permitida";
+  const expira = Date.parse(w.expiresAt);
+  if (!Number.isFinite(expira) || expira <= t)
+    return "La caducidad tiene que ser futura";
+  if (expira > t + 30 * 86400000)
+    return "La caducidad no puede pasar de 30 días";
+  const activas = s.watches.filter((x) => x.status === "active");
+  if (activas.length >= 50) return "Ya hay 50 vigilancias activas";
+  // El agente vuelve a proponer condiciones que ya estaba vigilando. Guardar la
+  // repetida no añade nada y dispara dos eventos, o sea dos llamadas al modelo,
+  // cuando el precio la cumple.
+  if (
+    activas.some(
+      (x) =>
+        x.symbol === w.symbol &&
+        x.operator === w.operator &&
+        x.price === w.price,
+    )
+  )
+    return "Esa misma condición ya se está vigilando";
+  return null;
 }
+export const validWatch = (w: z.infer<typeof watchSchema>, s: State) =>
+  watchProblem(w, s) === null;
 export function orderGuard(
   s: State,
   p: z.infer<typeof proposalSchema>,

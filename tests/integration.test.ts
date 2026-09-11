@@ -161,7 +161,7 @@ test(
         },
       });
       assert.equal(outOfLimits.statusCode, 400);
-      assert.match(outOfLimits.json().error, /fuera de límites/);
+      assert.match(outOfLimits.json().error, /no está en la lista permitida/);
       const missing = await app.inject({
         method: "POST",
         url: `/api/watches/${crypto.randomUUID()}/cancel`,
