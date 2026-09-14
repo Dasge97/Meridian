@@ -377,24 +377,30 @@ test("A story is commented once, and unknown references are ignored", () => {
   assert.deepEqual(segundo.newsCommented, []);
   assert.equal(newsNotice(s, segundo), null);
 });
-test("Short references are what the schema accepts, not raw provider ids", () => {
-  assert.throws(() =>
-    waiting({
-      newsComments: [
-        { ref: "61747603", matters: false, comment: "x".repeat(20) },
-      ],
-    }),
+test("A malformed news comment is dropped without losing the rest of the answer", () => {
+  const p = waiting({
+    newsComments: [
+      { ref: "61747603", matters: false, comment: "x".repeat(20) },
+      { ref: "n1", matters: false, comment: "x".repeat(20) },
+      // Caso real: comentó con ref null una noticia que ya estaba comentada.
+      { ref: null, matters: false, comment: "x".repeat(20) },
+      "no es un objeto",
+      { ref: "N12", matters: true, comment: "x".repeat(20) },
+    ],
+  });
+  assert.equal(p.action, "wait", "la decisión se conserva");
+  assert.deepEqual(
+    p.newsComments.map((c) => c.ref),
+    ["N12"],
+    "solo queda la referencia corta válida",
   );
-  assert.throws(() =>
-    waiting({
-      newsComments: [{ ref: "n1", matters: false, comment: "x".repeat(20) }],
-    }),
-  );
-  assert.ok(
-    waiting({
-      newsComments: [{ ref: "N12", matters: false, comment: "x".repeat(20) }],
-    }),
-  );
+  const muchos = waiting({
+    newsComments: Array.from({ length: 12 }, (_, i) => ({
+      ref: `N${i + 1}`,
+      comment: "x".repeat(20),
+    })),
+  });
+  assert.equal(muchos.newsComments.length, 8);
 });
 test("The heading says at a glance how many stories actually matter", () => {
   const s = state();
@@ -418,17 +424,16 @@ test("The heading says at a glance how many stories actually matter", () => {
   assert.match(newsNotice(s, soloRuido)!.text, /ninguna cambia nada/);
 });
 test("A news comment stays short enough to read on a phone", () => {
-  // Un comentario largo se rechaza en el esquema, antes de llegar a Telegram.
-  assert.throws(() =>
-    proposal({
-      newsComments: [{ ref: "N1", matters: false, comment: "x".repeat(400) }],
-    }),
-  );
-  assert.ok(
-    proposal({
-      newsComments: [{ ref: "N1", matters: false, comment: "x".repeat(300) }],
-    }),
-  );
+  // Un comentario largo se recorta en el esquema, antes de llegar a Telegram.
+  const largo = proposal({
+    newsComments: [{ ref: "N1", matters: false, comment: "x".repeat(400) }],
+  });
+  assert.equal(largo.newsComments[0].comment.length, 320);
+  assert.ok(largo.newsComments[0].comment.endsWith("…"));
+  const corto = proposal({
+    newsComments: [{ ref: "N1", matters: false, comment: "x".repeat(300) }],
+  });
+  assert.equal(corto.newsComments[0].comment.length, 300);
 });
 test("A closed market is not a problem worth interrupting the owner", () => {
   const s = state();

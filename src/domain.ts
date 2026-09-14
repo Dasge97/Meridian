@@ -28,6 +28,24 @@ export const lessonSchema = z.object({
   body: z.string().min(10).max(4000),
   source: z.string().min(3).max(1000),
 });
+export const NEWS_COMMENTS_MAX = 8,
+  NEWS_COMMENT_CHARS = 320;
+export const newsCommentSchema = z.object({
+  // Referencia corta (N1, N2...). Los identificadores largos del proveedor se
+  // confundían y el comentario acababa pegado a otra noticia.
+  ref: z.string().regex(/^N[0-9]{1,2}$/),
+  // El modelo a veces lo omite. Se toma como que la noticia no importa.
+  matters: z.boolean().default(false),
+  // Se lee en el móvil. Uno largo se recorta en vez de perderse.
+  comment: z
+    .string()
+    .min(10)
+    .transform((c) =>
+      c.length <= NEWS_COMMENT_CHARS
+        ? c
+        : c.slice(0, NEWS_COMMENT_CHARS - 1) + "…",
+    ),
+});
 export const proposalSchema = z.object({
   action: z.enum(["wait", "buy", "sell"]),
   symbol: z
@@ -41,18 +59,21 @@ export const proposalSchema = z.object({
   reviewAfterHours: z.number().int().min(1).max(168),
   notify: z.boolean(),
   note: z.string().min(10).max(700),
+  // Cada comentario se valida por separado y el que no vale se descarta. Antes
+  // un solo comentario mal formado tumbaba la respuesta entera: el 14/09/2026 el
+  // modelo comentó con ref null una noticia ya comentada, y se perdieron dos
+  // evaluaciones seguidas justo después de una compra.
   newsComments: z
-    .array(
-      z.object({
-        ref: z.string().regex(/^N[0-9]{1,2}$/),
-        // El modelo a veces lo omite. Sin valor por defecto se perdía la
-        // evaluación entera, y con ella el evento que la había provocado.
-        matters: z.boolean().default(false),
-        comment: z.string().min(10).max(320),
-      }),
-    )
-    .max(8)
-    .default([]),
+    .array(z.unknown())
+    .default([])
+    .transform((items) =>
+      items
+        .flatMap((x) => {
+          const r = newsCommentSchema.safeParse(x);
+          return r.success ? [r.data] : [];
+        })
+        .slice(0, NEWS_COMMENTS_MAX),
+    ),
   watches: z.array(watchSchema).max(5),
   // Ya no se piden: las lecciones salen de las revisiones. Se admite el campo
   // para leer decisiones antiguas y por si el modelo lo sigue enviando.
