@@ -15,7 +15,9 @@ export type Story = {
 export const STORIES_KEPT = 30,
   HEADLINE_MAX = 300,
   SUMMARY_MAX = 600,
-  STORY_AGE_HOURS = 48;
+  // Con la bolsa cerrada las noticias esperan a la apertura. Tienen que
+  // sobrevivir a un fin de semana largo: del jueves al cierre hasta el lunes.
+  STORY_AGE_HOURS = 96;
 const text = (v: unknown, max: number) =>
   typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "";
 export function usableStory(raw: unknown, allowed: string[]): Story | null {

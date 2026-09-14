@@ -143,12 +143,14 @@ export function reviewNotice(s: State, d: Decision): Notice | null {
       escapeHtml(d.review.text),
   };
 }
-export function problemNotice(mensaje: string): Notice {
+// La dirección del panel llega de la configuración (APP_ORIGIN): el repositorio
+// es público y no debe llevar escrita la de ningún servidor concreto.
+export function problemNotice(mensaje: string, panel?: string): Notice {
   return {
     kind: "problema",
     text:
-      `<b>🔴 Algo va mal</b>\n\n${escapeHtml(mensaje)}\n\n` +
-      `Míralo en https://meridian.code-hive.space`,
+      `<b>🔴 Algo va mal</b>\n\n${escapeHtml(mensaje)}` +
+      (panel ? `\n\nMíralo en ${escapeHtml(panel)}` : ""),
   };
 }
 // Los comentarios del agente sobre las noticias que acaba de leer. Va aparte del

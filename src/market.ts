@@ -1,5 +1,6 @@
 // Análisis técnico a partir de velas diarias. Sin entrada ni salida: se calcula
 // sobre lo que le llega, para poder probarlo sin red ni base de datos.
+import { newYorkDate } from "./clock.ts";
 export type Bar = {
   t: string;
   o: number;
@@ -34,10 +35,14 @@ export type Today = {
   prevClose: number | null;
   changePct: number | null;
 };
+export type Session = Today & { date: string };
 export type Analysis = {
   at: string;
   bars: Bar[];
-  today: Today | null;
+  // La sesión de hoy, solo mientras está abierta. Fuera de ella es null.
+  today: Session | null;
+  // La última sesión completa. Con la bolsa cerrada es la única que hay.
+  lastSession?: Session | null;
   indicators: Indicators | null;
   barsUsed: number;
   barsDiscarded: number;
@@ -159,18 +164,44 @@ export function todayFrom(bars: Bar[]): Today | null {
     changePct: prev && prev.c > 0 ? round((last.c / prev.c - 1) * 100) : null,
   };
 }
+const withDate = (bars: Bar[]): Session | null => {
+  const x = todayFrom(bars);
+  return x ? { ...x, date: newYorkDate(bars.at(-1)!.t) } : null;
+};
+// Situación de la sesión al calcular: si está abierta, si la de hoy ya empezó y
+// qué día es hoy en Nueva York.
+export type SessionState = { open: boolean; started: boolean; today: string };
 export function analyse(
   raw: unknown[],
   price: number,
   source: string,
   at = new Date().toISOString(),
+  session: SessionState = {
+    open: false,
+    started: true,
+    today: newYorkDate(at),
+  },
 ): Analysis {
-  const { bars, discarded } = cleanBars(raw);
+  const { bars: all, discarded } = cleanBars(raw);
+  const last = all.at(-1);
+  const lastIsToday =
+    last !== undefined && newYorkDate(last.t) === session.today;
+  // Antes de la apertura, una vela con la fecha de hoy solo trae operaciones
+  // previas a la sesión. Presentarla como un día de mercado confunde al agente.
+  const bars = lastIsToday && !session.started ? all.slice(0, -1) : all;
+  const partial = lastIsToday && session.open;
+  const completed = partial ? bars.slice(0, -1) : bars;
+  const ind = indicators(bars, price);
+  // A media sesión el volumen acumulado siempre parece bajo frente a días
+  // enteros. Se compara la última sesión completa.
+  if (ind && partial)
+    ind.volumeRatio20 = indicators(completed, price)?.volumeRatio20 ?? null;
   return {
     at,
     bars: bars.slice(-BARS_KEPT),
-    today: todayFrom(bars),
-    indicators: indicators(bars, price),
+    today: partial ? withDate(bars) : null,
+    lastSession: withDate(completed),
+    indicators: ind,
     barsUsed: bars.length,
     barsDiscarded: discarded,
     source,

@@ -120,7 +120,7 @@ test("Only genuinely new stories are reported as new", () => {
 test("Stale stories and stories about dropped assets are forgotten", () => {
   const vieja: Story = {
     id: "vieja",
-    at: new Date(Date.now() - 72 * 3600000).toISOString(),
+    at: new Date(Date.now() - 120 * 3600000).toISOString(),
     source: "x",
     headline: "titular",
     summary: "",
@@ -241,11 +241,19 @@ test("Text from the model and from third parties cannot break the message", () =
   assert.ok(!aviso.text.includes("<script>"), "no debe colarse marcado ajeno");
   assert.match(aviso.text, /&lt;script&gt;/);
 });
-test("A problem notice points at the panel", () => {
-  const aviso = problemNotice("La orden quedó en estado incierto");
+test("A problem notice points at the configured panel", () => {
+  const aviso = problemNotice(
+    "La orden quedó en estado incierto",
+    "https://panel.ejemplo.test",
+  );
   assert.equal(aviso.kind, "problema");
   assert.match(aviso.text, /Algo va mal/);
-  assert.match(aviso.text, /meridian\.code-hive\.space/);
+  assert.match(aviso.text, /https:\/\/panel\.ejemplo\.test/);
+  assert.doesNotMatch(
+    problemNotice("Sin panel configurado").text,
+    /Míralo/,
+    "sin dirección no se inventa un enlace",
+  );
 });
 const story = (over: Record<string, unknown> = {}) => ({
   id: "n1",

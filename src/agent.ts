@@ -6,6 +6,7 @@ import {
   validWatch,
   watchState,
   orderGuard,
+  EVENT_ATTEMPTS,
   type State,
   type Decision,
   type Quote,
@@ -14,12 +15,15 @@ import {
 import type { z } from "zod";
 import type { Analysis } from "./market.ts";
 import { mergeStories, summarise, pendingRefs } from "./news.ts";
+import { sessionOpen, PRE_OPEN_MINUTES } from "./clock.ts";
 // Worker state transitions, kept free of I/O so they can be tested directly.
 export type Job = {
   meta: NonNullable<State["modelJob"]>;
   state: State;
   due: Decision | null;
   event?: string;
+  // El evento tal como estaba en la cola, para devolverlo si la evaluación falla.
+  queued?: State["queue"][number];
 };
 export type Snapshot = {
   account: any;
@@ -111,8 +115,12 @@ export function applyMarket(
   // queda guardado, el agente lo sigue viendo en su contexto cada vez más viejo.
   for (const symbol of Object.keys(s.quotes))
     if (!s.settings.symbols.includes(symbol)) delete s.quotes[symbol];
+  // IEX también da operaciones antes de la apertura y después del cierre. Una
+  // vigilancia se activa una sola vez: si lo hiciera a esa hora, el agente no
+  // podría operar y la condición se perdería.
+  const vigilar = !s.paused && sessionOpen(s, t);
   for (const w of s.watches) {
-    const next = watchState(w, s.paused ? undefined : s.quotes[w.symbol], t);
+    const next = watchState(w, vigilar ? s.quotes[w.symbol] : undefined, t);
     if (next !== w.status) {
       w.status = next;
       log(s, "watch", `${w.symbol}: vigilancia ${next}`);
@@ -156,11 +164,31 @@ export function claimJob(s: State, ready: boolean, t = Date.now()): Job | null {
     t - Date.parse(s.lastDecision) < s.settings.cooldownSeconds * 1000
   )
     return null;
-  const due = s.decisions.find(
-    (d) =>
-      !d.review && (d.reviewAttempts ?? 0) < 3 && Date.parse(d.reviewAt) <= t,
-  );
+  // Revisar una espera que ya tiene una decisión posterior no aporta nada: la
+  // situación se volvió a evaluar. Solo gasta una llamada y repite lecciones.
+  const last = s.decisions.at(-1);
+  for (const d of s.decisions)
+    if (
+      d !== last &&
+      !d.review &&
+      !d.reviewSkipped &&
+      d.proposal.action === "wait" &&
+      Date.parse(d.reviewAt) <= t
+    )
+      d.reviewSkipped =
+        "Hubo una decisión posterior, así que revisar esta espera no aporta nada nuevo.";
+  // Los eventos van antes que las revisiones. Una vigilancia cumplida en la
+  // apertura no puede esperar detrás de revisiones atrasadas.
   const event = s.queue[0];
+  const due = event
+    ? undefined
+    : s.decisions.find(
+        (d) =>
+          !d.review &&
+          !d.reviewSkipped &&
+          (d.reviewAttempts ?? 0) < 3 &&
+          Date.parse(d.reviewAt) <= t,
+      );
   if (!due && !event) return null;
   s.calls.count++;
   s.lastDecision = new Date(t).toISOString();
@@ -176,8 +204,28 @@ export function claimJob(s: State, ready: boolean, t = Date.now()): Job | null {
     meta: s.modelJob,
     state: structuredClone(s),
     due: due ? structuredClone(due) : null,
-    event: event?.reason,
+    event: due ? undefined : event.reason,
+    queued: due ? undefined : structuredClone(event),
   };
+}
+// Una evaluación fallida gasta su llamada. El evento vuelve a la cola una vez:
+// si no, una respuesta mal formada perdía para siempre lo que la provocó.
+export function failJob(s: State, job: Job, motivo: string) {
+  s.modelJob = null;
+  const q = job.queued;
+  const intentos = (q?.attempts ?? 0) + 1;
+  const reintento = !job.due && q !== undefined && intentos < EVENT_ATTEMPTS;
+  if (reintento) s.queue.unshift({ ...q, attempts: intentos });
+  const despues = job.due
+    ? "Las revisiones se intentan como máximo 3 veces."
+    : reintento
+      ? "El evento vuelve a la cola para un segundo intento."
+      : "El evento ya se había reintentado y se descarta. Puedes solicitar otra reevaluación.";
+  log(
+    s,
+    "error",
+    `Falló la evaluación: ${motivo}. El intento cuenta para el límite diario. ${despues}`,
+  );
 }
 // Re-checks limits after the call, because settings may have changed meanwhile.
 export function applyDecision(
@@ -327,7 +375,39 @@ export function applyNews(s: State, raw: unknown[], t = Date.now()) {
   );
   s.stories = stories;
   if (!fresh.length) return 0;
-  log(s, "news", summarise(fresh));
-  if (!s.paused) enqueue(s, summarise(fresh));
+  // Con la bolsa cerrada el agente no puede operar: despertarlo por cada tanda
+  // gastaba una llamada para decir que espera. Las noticias se guardan y se
+  // comentan juntas antes de la apertura. Sin calendario no se sabe si está
+  // cerrada, y se prefiere no perder la noticia.
+  const despertar = sessionOpen(s, t) || !s.feeds.clock;
+  log(
+    s,
+    "news",
+    summarise(fresh) +
+      (despertar ? "" : ". Bolsa cerrada: se comentarán antes de la apertura."),
+  );
+  if (!s.paused && despertar) enqueue(s, summarise(fresh));
   return fresh.length;
+}
+export const NEWS_REVIEW_REASON = "Repaso de noticias pendientes de comentar";
+// Encola una sola vez por sesión el repaso de las noticias sin comentar: en los
+// 30 minutos previos a la apertura, o nada más abrir si el worker no estaba.
+export function queueNewsBeforeOpen(s: State, t = Date.now()) {
+  if (s.paused || !s.feeds.clock || s.queue.length) return false;
+  // El cierre de la próxima sesión la identifica tanto antes como durante ella.
+  const sesion = s.market.nextClose;
+  if (!sesion || s.preOpenNews === sesion) return false;
+  if (!sessionOpen(s, t)) {
+    const apertura = s.market.nextOpen ? Date.parse(s.market.nextOpen) : NaN;
+    const faltan = (apertura - t) / 60000;
+    if (!(faltan > 0 && faltan <= PRE_OPEN_MINUTES)) return false;
+  }
+  const pendientes = (s.stories ?? []).filter((n) => !n.commented).length;
+  if (!pendientes) return false;
+  s.preOpenNews = sesion;
+  enqueue(
+    s,
+    `${NEWS_REVIEW_REASON}: ${pendientes} ${pendientes === 1 ? "noticia llegada" : "noticias llegadas"} con la bolsa cerrada`,
+  );
+  return true;
 }

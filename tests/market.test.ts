@@ -9,6 +9,7 @@ import {
   analyse,
   type Bar,
 } from "../src/market.ts";
+import { newYorkDate } from "../src/clock.ts";
 const bar = (over: Partial<Bar> = {}): Bar => ({
   t: "2026-09-01T04:00:00Z",
   o: 100,
@@ -136,6 +137,51 @@ test("The analysis keeps only recent bars and says what it discarded", () => {
   assert.equal(a.barsDiscarded, 1);
   assert.equal(a.indicators!.sma20, 149.5);
   assert.equal(a.source, "prueba");
+});
+// Tres sesiones: jueves 10, viernes 11 y lunes 14 de septiembre de 2026.
+const semana = () => [
+  bar({ t: "2026-09-10T04:00:00Z", c: 100, o: 99, h: 101, l: 98, v: 1000 }),
+  bar({ t: "2026-09-11T04:00:00Z", c: 102, o: 100, h: 103, l: 99, v: 1000 }),
+  bar({ t: "2026-09-14T04:00:00Z", c: 103, o: 102, h: 104, l: 101, v: 200 }),
+];
+test("With the market closed there is no session of today, only the last complete one", () => {
+  const sabado = analyse(semana().slice(0, 2), 102, "prueba", undefined, {
+    open: false,
+    started: true,
+    today: "2026-09-12",
+  });
+  assert.equal(sabado.today, null, "el viernes no es la sesión de hoy");
+  assert.equal(sabado.lastSession!.date, "2026-09-11");
+  assert.equal(sabado.lastSession!.close, 102);
+});
+test("Before the opening a bar dated today is left out", () => {
+  const lunes = analyse(semana(), 102, "prueba", undefined, {
+    open: false,
+    started: false,
+    today: "2026-09-14",
+  });
+  assert.equal(lunes.today, null);
+  assert.equal(lunes.lastSession!.date, "2026-09-11");
+  assert.equal(lunes.barsUsed, 2);
+});
+test("During the session today is partial and volume uses the last complete one", () => {
+  const bars = [
+    ...serie(25),
+    bar({ t: "2026-09-14T04:00:00Z", c: 125, o: 124, h: 126, l: 123, v: 10 }),
+  ];
+  bars[24] = { ...bars[24], v: 3000 };
+  const a = analyse(bars, 125, "prueba", undefined, {
+    open: true,
+    started: true,
+    today: "2026-09-14",
+  });
+  assert.equal(a.today!.date, "2026-09-14");
+  assert.equal(a.lastSession!.date, newYorkDate(bars[24].t));
+  assert.equal(
+    a.indicators!.volumeRatio20,
+    3,
+    "la sesión a medias no hace parecer bajo el volumen",
+  );
 });
 test("Without bars or without a price there are no indicators, and it does not crash", () => {
   const vacio = analyse([], 100, "prueba");

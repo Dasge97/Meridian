@@ -30,7 +30,7 @@ El agente puede dejarse vigilancias: «si el precio llega a X, vuelve a analizar
 
 | Área        | Funcionalidad                                                                        |
 | ----------- | ------------------------------------------------------------------------------------ |
-| Panel       | Patrimonio, posiciones, conexión, consumo de llamadas y actividad                    |
+| Panel       | Patrimonio, posiciones, conexión, horario de la bolsa, llamadas y actividad          |
 | Mercado     | Velas diarias consolidadas, resumen de la sesión, indicadores y noticias             |
 | Avisos      | Bot de Telegram que cuenta qué hace el agente y por qué, solo cuando importa         |
 | Decisiones  | Contexto guardado, hipótesis, versión, orden y revisión posterior                    |
@@ -59,7 +59,9 @@ flowchart TD
   J -->|Aprobación del propietario| E
 ```
 
-No hay un cron que decida comprar a una hora concreta. El worker mantiene un WebSocket de operaciones IEX, comprueba condiciones aproximadamente cada 2 segundos y sincroniza la cuenta cada 30 segundos. Esos intervalos son mantenimiento: las llamadas al modelo se activan por eventos o por revisiones pendientes. Mercado, bróker y modelo corren en bucles separados, así que una llamada al modelo no interrumpe la comprobación de condiciones. Aun así, **no es un sistema de alta frecuencia**.
+No hay un cron que decida comprar a una hora concreta. El worker mantiene un WebSocket de operaciones IEX, comprueba condiciones aproximadamente cada 2 segundos y sincroniza la cuenta cada 30 segundos. Esos intervalos son mantenimiento: las llamadas al modelo se activan por eventos o por revisiones pendientes. Mercado, bróker, modelo, velas y noticias corren en bucles separados, así que una llamada al modelo no interrumpe la comprobación de condiciones. Aun así, **no es un sistema de alta frecuencia**.
+
+Con la bolsa cerrada el agente no se despierta por noticias ni por vigilancias: no podría operar. Las noticias se guardan y se comentan juntas en la media hora previa a la apertura.
 
 Las vigilancias siempre **reevalúan**, no ejecutan planes ciegamente. El agente puede comprar, vender o esperar; sus propuestas se validan con Zod y con límites que no puede editar. Cada intención tiene un `client_order_id` estable. Un timeout de envío provoca pausa y reconciliación, nunca un reenvío automático.
 
@@ -160,6 +162,7 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 
 ```text
 src/domain.ts     Esquemas, límites de riesgo y poda del historial
+src/clock.ts      Horario de la bolsa ya calculado, sin entrada/salida
 src/market.ts     Validación de velas e indicadores, sin entrada/salida
 src/news.ts       Filtrado y caducidad de noticias, sin entrada/salida
 src/report.ts     Qué merece un aviso y cómo se redacta, sin entrada/salida

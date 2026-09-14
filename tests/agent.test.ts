@@ -17,6 +17,10 @@ import {
   claimJob,
   applyDecision,
   applyReview,
+  applyNews,
+  queueNewsBeforeOpen,
+  failJob,
+  NEWS_REVIEW_REASON,
   type Job,
 } from "../src/agent.ts";
 function state(): State {
@@ -26,8 +30,34 @@ function state(): State {
   s.baseline = 10000;
   s.lastSync = now();
   s.quotes.AAPL = { price: 200, at: now() };
+  // Sesión abierta durante la próxima hora, salvo que la prueba diga otra cosa.
+  s.market = {
+    open: true,
+    nextOpen: null,
+    nextClose: new Date(Date.now() + 3600000).toISOString(),
+  };
   return s;
 }
+// La bolsa cerrada, con la apertura dentro de los minutos indicados.
+function closed(s: State, minutesToOpen: number) {
+  s.market = {
+    open: false,
+    nextOpen: new Date(Date.now() + minutesToOpen * 60000).toISOString(),
+    nextClose: new Date(
+      Date.now() + (minutesToOpen + 390) * 60000,
+    ).toISOString(),
+  };
+  return s;
+}
+const rawStory = (storyId: string) => ({
+  id: storyId,
+  created_at: now(),
+  source: "benzinga",
+  headline: "Titular sobre Apple",
+  summary: "Resumen",
+  symbols: ["AAPL"],
+  url: "https://ejemplo.test",
+});
 const proposal = (over: Record<string, unknown> = {}) =>
   proposalSchema.parse({
     action: "buy",
@@ -97,7 +127,7 @@ test("Model work is reserved only when pause, budget and cooldown allow it", () 
   s.calls.count = s.settings.maxDailyCalls;
   assert.equal(claimJob(s, true), null, "el límite diario debe impedirlo");
 });
-test("A due review is preferred over a queued event and retries at most three times", () => {
+test("A queued event goes before a due review, and a review retries at most three times", () => {
   const s = state();
   s.decisions = [
     decision(s, {
@@ -105,14 +135,50 @@ test("A due review is preferred over a queued event and retries at most three ti
       reviewAt: new Date(Date.now() - 1000).toISOString(),
     }),
   ];
-  s.queue = [{ id: id(), reason: "Evento", at: now() }];
+  s.queue = [{ id: id(), reason: "Vigilancia cumplida", at: now() }];
+  assert.equal(claimJob(s, true)?.meta.kind, "decision");
+  assert.equal(s.queue.length, 0);
+  assert.equal(s.decisions[0].reviewAttempts, undefined, "la revisión espera");
+  s.modelJob = null;
+  s.lastDecision = null;
   assert.equal(claimJob(s, true)?.meta.kind, "review");
-  assert.equal(s.queue.length, 1, "el evento sigue en cola");
   assert.equal(s.decisions[0].reviewAttempts, 1);
   s.decisions[0].reviewAttempts = 3;
   s.modelJob = null;
   s.lastDecision = null;
-  assert.equal(claimJob(s, true)?.meta.kind, "decision");
+  assert.equal(claimJob(s, true), null, "tras tres intentos no se insiste");
+});
+test("A wait that was followed by another decision is not reviewed", () => {
+  const s = state();
+  const pasada = new Date(Date.now() - 1000).toISOString();
+  s.decisions = [
+    decision(s, { proposal: waiting(), reviewAt: pasada }),
+    decision(s, { proposal: proposal(), status: "filled", reviewAt: pasada }),
+    decision(s, { proposal: waiting(), reviewAt: pasada }),
+  ];
+  const trabajo = claimJob(s, true);
+  assert.equal(trabajo?.due?.id, s.decisions[1].id, "la compra sí se revisa");
+  assert.match(s.decisions[0].reviewSkipped!, /decisión posterior/);
+  assert.equal(
+    s.decisions[2].reviewSkipped,
+    undefined,
+    "la última espera aún se revisa",
+  );
+});
+test("A failed evaluation puts its event back once, then drops it", () => {
+  const s = state();
+  s.queue = [{ id: id(), reason: "Vigilancia cumplida", at: now() }];
+  const primero = claimJob(s, true)!;
+  failJob(s, primero, "la respuesta no cumple el esquema");
+  assert.equal(s.modelJob, null);
+  assert.equal(s.queue.length, 1);
+  assert.equal(s.queue[0].attempts, 1);
+  assert.match(s.events[0].message, /segundo intento/);
+  s.lastDecision = null;
+  const segundo = claimJob(s, true)!;
+  failJob(s, segundo, "otra vez mal");
+  assert.equal(s.queue.length, 0);
+  assert.match(s.events[0].message, /se descarta/);
 });
 test("An interrupted evaluation is cleared and reported once", () => {
   const s = state();
@@ -248,6 +314,84 @@ test("While paused no price condition fires", () => {
   assert.equal(s.watches[0].status, "triggered");
   assert.equal(s.queue.length, 1);
 });
+test("A price condition only fires during the regular session", () => {
+  const s = closed(state(), 60);
+  s.watches = [
+    {
+      id: id(),
+      symbol: "AAPL",
+      operator: "lte",
+      price: 300,
+      expiresAt: new Date(Date.now() + 86400000).toISOString(),
+      reason: "Reevaluar",
+      invalidateBelow: null,
+      invalidateAbove: null,
+      status: "active",
+      createdAt: now(),
+    },
+  ];
+  // Operación de antes de la apertura: no debe gastar la vigilancia.
+  applyMarket(s, { AAPL: { price: 100, at: now() } }, true, Date.now());
+  assert.equal(s.watches[0].status, "active");
+  assert.equal(s.queue.length, 0);
+  s.market = {
+    open: true,
+    nextOpen: null,
+    nextClose: new Date(Date.now() - 1000).toISOString(),
+  };
+  applyMarket(s, { AAPL: { price: 100, at: now() } }, true, Date.now());
+  assert.equal(
+    s.watches[0].status,
+    "active",
+    "pasado el cierre tampoco, aunque el calendario siga diciendo abierta",
+  );
+});
+test("With the market closed news is saved but does not wake the agent", () => {
+  const s = closed(state(), 600);
+  assert.equal(applyNews(s, [rawStory("1")]), 1);
+  assert.equal(s.stories.length, 1);
+  assert.equal(s.queue.length, 0);
+  assert.match(s.events[0].message, /antes de la apertura/);
+  const abierta = state();
+  applyNews(abierta, [rawStory("2")]);
+  assert.equal(abierta.queue.length, 1, "con la bolsa abierta sí despierta");
+  const sinCalendario = closed(state(), 600);
+  sinCalendario.feeds.clock = false;
+  applyNews(sinCalendario, [rawStory("3")]);
+  assert.equal(
+    sinCalendario.queue.length,
+    1,
+    "sin calendario no se arriesga a perderla",
+  );
+});
+test("Pending news is reviewed once, in the half hour before the opening", () => {
+  const s = closed(state(), 600);
+  applyNews(s, [rawStory("1"), rawStory("2")]);
+  assert.equal(queueNewsBeforeOpen(s), false, "faltan diez horas");
+  closed(s, 20);
+  s.market.nextClose = new Date(Date.now() + 410 * 60000).toISOString();
+  assert.equal(queueNewsBeforeOpen(s), true);
+  assert.equal(s.queue.length, 1);
+  assert.match(s.queue[0].reason, new RegExp(NEWS_REVIEW_REASON));
+  assert.match(s.queue[0].reason, /2 noticias/);
+  s.queue = [];
+  assert.equal(queueNewsBeforeOpen(s), false, "una sola vez por sesión");
+  // Ya abierta, la misma sesión no vuelve a encolarlo.
+  s.market.open = true;
+  assert.equal(queueNewsBeforeOpen(s), false);
+  const sinNoticias = closed(state(), 20);
+  assert.equal(queueNewsBeforeOpen(sinNoticias), false, "nada que comentar");
+});
+test("If the worker missed the half hour, pending news is reviewed at the opening", () => {
+  const s = closed(state(), 600);
+  applyNews(s, [rawStory("1")]);
+  s.market = {
+    open: true,
+    nextOpen: null,
+    nextClose: new Date(Date.now() + 3600000).toISOString(),
+  };
+  assert.equal(queueNewsBeforeOpen(s), true);
+});
 test("The stream is reported as disconnected after two minutes without trades", () => {
   const s = state();
   applyMarket(s, {}, true, Date.now());
@@ -382,8 +526,12 @@ test("Removing an asset from the list also drops its stale price", () => {
   assert.equal(s.quotes.MSFT, undefined, "un activo retirado no deja precio");
 });
 test("The agent is told whether the market is open and when it reopens", () => {
+  assert.equal(
+    initialState().market.open,
+    false,
+    "al empezar se asume cerrada",
+  );
   const s = state();
-  assert.equal(s.market.open, false);
   applySnapshot(s, {
     account: { equity: "100000", cash: "100000", status: "ACTIVE" },
     positions: [],

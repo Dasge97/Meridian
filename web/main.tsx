@@ -26,6 +26,25 @@ const date = (s: string | null | undefined) =>
         timeStyle: "short",
       })
     : "—";
+// Día y hora en la zona del navegador, que es la del propietario.
+const weekdayTime = (s: string) =>
+  new Date(s).toLocaleString("es-ES", {
+    weekday: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+// Mismo criterio que el worker: abierta solo si el calendario responde, dice que
+// está abierta y aún no ha llegado su cierre.
+const marketText = (s: State) => {
+  const m = s.market;
+  if (!m || !s.feeds?.clock) return "Calendario no disponible";
+  if (m.open && m.nextClose && Date.parse(m.nextClose) > Date.now())
+    return "Abierta hasta el " + weekdayTime(m.nextClose);
+  return m.nextOpen
+    ? "Cerrada · abre el " + weekdayTime(m.nextOpen)
+    : "Cerrada";
+};
 const labels: Record<string, string> = {
   active: "Vigilando",
   triggered: "Activada",
@@ -485,6 +504,10 @@ function App() {
                       </dd>
                     </div>
                     <div>
+                      <dt>Bolsa de Nueva York</dt>
+                      <dd>{marketText(s)}</dd>
+                    </div>
+                    <div>
                       <dt>Última evaluación</dt>
                       <dd>{date(s.lastDecision)}</dd>
                     </div>
@@ -621,7 +644,7 @@ function App() {
                           {a.barsUsed} sesiones · calculado {date(a.at)}
                         </span>
                       </div>
-                      {a.today && (
+                      {a.today ? (
                         <p className="muted">
                           Sesión en curso: abrió en {money(a.today.open)},
                           máximo {money(a.today.high)}, mínimo{" "}
@@ -632,6 +655,19 @@ function App() {
                             : ` (${a.today.changePct} %)`}
                           .
                         </p>
+                      ) : (
+                        a.lastSession && (
+                          <p className="muted">
+                            Última sesión ({a.lastSession.date}): cerró en{" "}
+                            {money(a.lastSession.close)}, máximo{" "}
+                            {money(a.lastSession.high)}, mínimo{" "}
+                            {money(a.lastSession.low)}
+                            {a.lastSession.changePct === null
+                              ? ""
+                              : ` (${a.lastSession.changePct} %)`}
+                            .
+                          </p>
+                        )
                       )}
                       {!i ? (
                         <Empty>
@@ -753,7 +789,9 @@ function App() {
                         <span className="muted">
                           {d.review
                             ? "Revisión disponible"
-                            : "Revisar " + date(d.reviewAt)}
+                            : d.reviewSkipped
+                              ? "Sin revisión"
+                              : "Revisar " + date(d.reviewAt)}
                         </span>
                         <span>Ver detalle ↗</span>
                       </div>
@@ -1363,7 +1401,9 @@ function App() {
             )}
             <h3>Revisión posterior</h3>
             <p className="preserve">
-              {selected.review?.text || "Pendiente: " + date(selected.reviewAt)}
+              {selected.review?.text ||
+                selected.reviewSkipped ||
+                "Pendiente: " + date(selected.reviewAt)}
             </p>
             {["unknown", "submitting"].includes(selected.status) && (
               <button

@@ -36,7 +36,10 @@ import {
   claimJob,
   applyDecision,
   applyReview,
+  failJob,
+  queueNewsBeforeOpen,
 } from "./agent.ts";
+import { sessionOpen, todayStarted, newYorkDate } from "./clock.ts";
 // One worker owns the market connection and outbox, including across rolling restarts.
 const lock = await pool.connect();
 if (!(await lock.query("SELECT pg_try_advisory_lock(746391) AS ok")).rows[0].ok)
@@ -50,7 +53,7 @@ let stopping = false,
   lastNews = 0,
   lastTick = 0,
   streamSymbols = "",
-  marketOpen = false;
+  syncFailure = "";
 const quotes: Record<string, Quote> = {};
 function connect(symbols: string[]) {
   if (!configured() || Date.now() < retryAt) return;
@@ -137,6 +140,7 @@ async function reconcileStep() {
         return primeraVez
           ? problemNotice(
               `No se sabe si la orden de ${target.proposal.symbol} llegó a Alpaca. El agente queda pausado hasta que lo resuelvas desde el panel. No se reenviará sola.`,
+              process.env.APP_ORIGIN,
             )
           : null;
       });
@@ -145,7 +149,7 @@ async function reconcileStep() {
   }
 }
 async function submitStep() {
-  const intent = await change((s) => claimIntent(s, marketOpen));
+  const intent = await change((s) => claimIntent(s, sessionOpen(s)));
   if (!intent) return;
   try {
     const p = intent.proposal;
@@ -190,6 +194,7 @@ async function submitStep() {
       );
       return problemNotice(
         `La orden de ${intent.proposal.symbol} se envió pero Alpaca no confirmó. El agente queda pausado y hay que reconciliar desde el panel.`,
+        process.env.APP_ORIGIN,
       );
     });
     await notify(aviso);
@@ -204,11 +209,24 @@ async function analysisStep() {
   const symbols = state.settings.symbols;
   if (!symbols.length) return;
   const raw = await dailyBars(symbols);
+  const t = Date.now();
+  const session = {
+    open: sessionOpen(state, t),
+    started: todayStarted(state, t),
+    today: newYorkDate(t),
+  };
   const fresh: Record<string, Analysis> = {};
   for (const symbol of symbols) {
     const price = state.quotes[symbol]?.price ?? 0;
     const bars = raw[symbol] ?? [];
-    if (bars.length) fresh[symbol] = analyse(bars, price, "alpaca sip 1Day");
+    if (bars.length)
+      fresh[symbol] = analyse(
+        bars,
+        price,
+        "alpaca sip 1Day",
+        new Date(t).toISOString(),
+        session,
+      );
   }
   if (Object.keys(fresh).length) await change((s) => applyAnalysis(s, fresh));
 }
@@ -218,24 +236,34 @@ async function brokerStep() {
     try {
       const state = await read();
       const x = await snapshot(state.settings.symbols);
-      marketOpen = Boolean(x.clock?.is_open);
+      const recuperada = syncFailure !== "";
+      syncFailure = "";
       const avisos = await change((s) => {
         const antes = new Map(s.decisions.map((d) => [d.id, d.status]));
         applySnapshot(s, x);
+        queueNewsBeforeOpen(s);
+        if (recuperada)
+          log(s, "market", "Alpaca vuelve a sincronizar la cuenta.");
         return s.decisions
           .filter((d) => antes.get(d.id) !== d.status)
           .map((d) => orderNotice(s, d, d.status))
           .filter((n): n is Notice => n !== null);
       });
       for (const aviso of avisos) await notify(aviso);
-    } catch {
-      await change((s) => {
-        log(
-          s,
-          "error",
-          "No se pudo sincronizar Alpaca; no se enviarán órdenes con datos obsoletos.",
-        );
-      });
+    } catch (e) {
+      // Se registra el motivo y solo la primera vez de una racha: antes quedaba
+      // un aviso idéntico cada 30 segundos, sin decir qué fallaba.
+      const motivo = describeFailure(e);
+      if (motivo !== syncFailure) {
+        syncFailure = motivo;
+        await change((s) => {
+          log(
+            s,
+            "error",
+            `No se pudo sincronizar Alpaca (${motivo}). No se enviarán órdenes con datos obsoletos.`,
+          );
+        });
+      }
     }
   }
   await reconcileStep();
@@ -265,7 +293,7 @@ async function modelStep() {
     }
     const result = await decide(job.state, job.event!);
     const avisos = await change((s) => {
-      const d = applyDecision(s, job, result, marketOpen);
+      const d = applyDecision(s, job, result, sessionOpen(s));
       return [newsNotice(s, d), decisionNotice(s, d)];
     });
     for (const aviso of avisos) await notify(aviso);
@@ -273,14 +301,7 @@ async function modelStep() {
     // Sin el motivo concreto no hay forma de saber si falló el proveedor, si
     // tardó demasiado o si la respuesta no cumplía el esquema.
     const motivo = describeFailure(e);
-    await change((s) => {
-      s.modelJob = null;
-      log(
-        s,
-        "error",
-        `Falló la evaluación: ${motivo}. El intento cuenta para el límite diario. Puedes solicitar otra reevaluación. Las revisiones se intentan como máximo 3 veces.`,
-      );
-    });
+    await change((s) => failJob(s, job, motivo));
   }
 }
 // Enviar un aviso nunca puede impedir que el laboratorio siga funcionando: si

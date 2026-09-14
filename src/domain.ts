@@ -45,7 +45,9 @@ export const proposalSchema = z.object({
     .array(
       z.object({
         ref: z.string().regex(/^N[0-9]{1,2}$/),
-        matters: z.boolean(),
+        // El modelo a veces lo omite. Sin valor por defecto se perdía la
+        // evaluación entera, y con ella el evento que la había provocado.
+        matters: z.boolean().default(false),
         comment: z.string().min(10).max(320),
       }),
     )
@@ -89,6 +91,8 @@ export type Decision = {
   reviewAttempts?: number;
   sentAt?: string;
   review?: { at: string; text: string; price: number | null };
+  // Motivo por el que no se revisa, si se decidió no gastar la llamada.
+  reviewSkipped?: string;
   // Comentarios ya emparejados con su noticia, para el panel y para el aviso.
   newsCommented?: { storyId: string; comment: string; matters: boolean }[];
 };
@@ -101,7 +105,7 @@ export type State = {
   lessons: Lesson[];
   decisions: Decision[];
   events: { id: string; at: string; type: string; message: string }[];
-  queue: { id: string; reason: string; at: string }[];
+  queue: { id: string; reason: string; at: string; attempts?: number }[];
   quotes: Record<string, Quote>;
   account: any;
   positions: any[];
@@ -118,6 +122,8 @@ export type State = {
   analysis: Record<string, Analysis>;
   stories: Story[];
   lastNotice: { at: string; kind: string } | null;
+  // Sesión para la que ya se encoló el repaso de noticias pendientes.
+  preOpenNews: string | null;
   usage: { at: string; tokens: number }[];
   modelJob?: {
     id: string;
@@ -172,6 +178,7 @@ export function initialState(): State {
     analysis: {},
     stories: [],
     lastNotice: null,
+    preOpenNews: null,
     usage: [],
   };
 }
@@ -182,6 +189,7 @@ export function log(s: State, type: string, message: string) {
 export function enqueue(s: State, reason: string) {
   if (s.queue.length < 100) s.queue.push({ id: id(), reason, at: now() });
 }
+export const EVENT_ATTEMPTS = 2;
 export function watchState(
   w: Watch,
   q: Quote | undefined,
@@ -358,6 +366,7 @@ export const hotKeys = [
   "feeds",
   "market",
   "lastNotice",
+  "preOpenNews",
   "modelJob",
 ] as const;
 // History. Large, and only written when something actually happens.
