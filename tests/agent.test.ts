@@ -20,7 +20,9 @@ import {
   applyNews,
   queueNewsBeforeOpen,
   failJob,
+  queueSessionScan,
   NEWS_REVIEW_REASON,
+  SCAN_REASON,
   type Job,
 } from "../src/agent.ts";
 function state(): State {
@@ -131,7 +133,8 @@ test("A queued event goes before a due review, and a review retries at most thre
   const s = state();
   s.decisions = [
     decision(s, {
-      proposal: waiting(),
+      status: "filled",
+      orderId: "alpaca-1",
       reviewAt: new Date(Date.now() - 1000).toISOString(),
     }),
   ];
@@ -148,22 +151,45 @@ test("A queued event goes before a due review, and a review retries at most thre
   s.lastDecision = null;
   assert.equal(claimJob(s, true), null, "tras tres intentos no se insiste");
 });
-test("A wait that was followed by another decision is not reviewed", () => {
+test("Only decisions that sent an order are reviewed", () => {
   const s = state();
   const pasada = new Date(Date.now() - 1000).toISOString();
   s.decisions = [
     decision(s, { proposal: waiting(), reviewAt: pasada }),
-    decision(s, { proposal: proposal(), status: "filled", reviewAt: pasada }),
-    decision(s, { proposal: waiting(), reviewAt: pasada }),
+    decision(s, { status: "blocked", reviewAt: pasada }),
+    decision(s, { status: "filled", orderId: "alpaca-1", reviewAt: pasada }),
   ];
   const trabajo = claimJob(s, true);
-  assert.equal(trabajo?.due?.id, s.decisions[1].id, "la compra sí se revisa");
-  assert.match(s.decisions[0].reviewSkipped!, /decisión posterior/);
-  assert.equal(
-    s.decisions[2].reviewSkipped,
-    undefined,
-    "la última espera aún se revisa",
-  );
+  assert.equal(trabajo?.due?.id, s.decisions[2].id, "la compra enviada sí");
+  assert.match(s.decisions[0].reviewSkipped!, /esperas no se revisan/);
+  assert.match(s.decisions[1].reviewSkipped!, /ninguna orden/);
+  const futura = decision(s, {
+    proposal: waiting(),
+    reviewAt: new Date(Date.now() + 3600000).toISOString(),
+  });
+  s.decisions.push(futura);
+  s.modelJob = null;
+  s.lastDecision = null;
+  claimJob(s, true);
+  assert.equal(s.decisions.at(-1)!.reviewSkipped, undefined, "aún no le toca");
+});
+test("The market is scanned every half hour during the session", () => {
+  const s = state();
+  assert.equal(queueSessionScan(s), true, "sin evaluaciones previas");
+  assert.equal(s.queue[0].reason, SCAN_REASON);
+  assert.equal(queueSessionScan(s), false, "ya hay algo en cola");
+  s.queue = [];
+  s.lastDecision = new Date(Date.now() - 10 * 60000).toISOString();
+  assert.equal(queueSessionScan(s), false, "evaluó hace 10 minutos");
+  s.lastDecision = new Date(Date.now() - 31 * 60000).toISOString();
+  assert.equal(queueSessionScan(s), true);
+  s.queue = [];
+  s.market.nextClose = new Date(Date.now() + 10 * 60000).toISOString();
+  assert.equal(queueSessionScan(s), false, "a 10 minutos del cierre no");
+  assert.equal(queueSessionScan(closed(state(), 20)), false, "cerrada no");
+  const pausado = state();
+  pausado.paused = true;
+  assert.equal(queueSessionScan(pausado), false);
 });
 test("A failed evaluation puts its event back once, then drops it", () => {
   const s = state();
@@ -211,7 +237,7 @@ test("A proposal is blocked when settings changed during the evaluation", () => 
   assert.equal(d.status, "blocked");
   assert.match(d.error!, /Configuración modificada/);
 });
-test("An accepted proposal saves its watches and proposed lessons", () => {
+test("An accepted proposal saves its watches but no lessons", () => {
   const s = state();
   const d = applyDecision(
     s,
@@ -245,9 +271,13 @@ test("An accepted proposal saves its watches and proposed lessons", () => {
   assert.equal(d.status, "pending");
   assert.equal(s.watches.length, 1);
   assert.equal(s.watches[0].decisionId, d.id);
-  assert.equal(s.lessons[0].status, "proposed");
+  assert.equal(
+    s.lessons.length,
+    0,
+    "una decisión ve noticias de terceros: de ahí no nace una lección",
+  );
 });
-test("A review stores its text and leaves its lessons as proposals", () => {
+test("A review stores its text and adopts its lessons in a new version", () => {
   const s = state();
   const target = decision(s, { status: "filled" });
   s.decisions = [target];
@@ -268,7 +298,10 @@ test("A review stores its text and leaves its lessons as proposals", () => {
     42,
   );
   assert.equal(s.decisions[0].review!.price, 200);
-  assert.equal(s.lessons[0].status, "proposed");
+  assert.equal(s.lessons[0].status, "accepted", "entra sola en la memoria");
+  assert.equal(s.lessons[0].decisionId, target.id);
+  assert.equal(s.versions.length, 2, "con su propia versión");
+  assert.deepEqual(s.versions.at(-1)!.lessonIds, [s.lessons[0].id]);
   assert.equal(s.modelJob, null);
 });
 test("A filled order queues a new evaluation and sets the first baseline", () => {

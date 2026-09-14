@@ -54,6 +54,7 @@ const labels: Record<string, string> = {
   proposed: "Propuesta",
   accepted: "Aceptada",
   rejected: "Descartada",
+  retired: "Retirada",
   observed: "Observación",
   blocked: "Bloqueada",
   pending: "En cola",
@@ -464,8 +465,8 @@ function App() {
                     <em> / {s.settings.maxDailyCalls}</em>
                   </strong>
                   <small>
-                    {s.lessons.filter((l) => l.status === "proposed").length}{" "}
-                    lecciones por revisar
+                    {s.lessons.filter((l) => l.status === "accepted").length}{" "}
+                    lecciones activas
                   </small>
                 </article>
               </div>
@@ -636,6 +637,21 @@ function App() {
                         ],
                       ]
                     : [];
+                  const d5 = s.intraday?.[symbol];
+                  const pct = (v: number | null) =>
+                    v === null ? "—" : `${v} %`;
+                  if (d5)
+                    filas.push(
+                      [`Sesión del ${d5.date} (5 min)`, `${d5.barsUsed} velas`],
+                      ["Precio medio del día (VWAP)", money(d5.vwap)],
+                      ["Cambio desde la apertura", pct(d5.changeFromOpenPct)],
+                      ["Cambio en 30 minutos", pct(d5.change30mPct)],
+                      ["Cambio en 60 minutos", pct(d5.change60mPct)],
+                      [
+                        "Posición en el rango del día",
+                        pct(d5.positionInDayRangePct),
+                      ],
+                    );
                   return (
                     <section className="panel" key={symbol}>
                       <div className="section-title">
@@ -977,8 +993,10 @@ function App() {
                 </button>
               </div>
               <p className="muted">
-                Aceptar una lección crea una nueva versión. Las propuestas no se
-                incorporan automáticamente a su memoria activa.
+                El agente incorpora solo las lecciones de revisar sus
+                operaciones, hasta 15 activas: al pasar el tope se retira la más
+                antigua. Cada cambio crea una versión. Puedes descartar una
+                lección o recuperar una versión anterior en Configuración.
               </p>
               {showLesson && (
                 <form
@@ -1019,7 +1037,7 @@ function App() {
                     />
                   </label>
                   <button className="primary" disabled={busy}>
-                    Añadir propuesta
+                    Añadir a su memoria
                   </button>
                 </form>
               )}
@@ -1064,7 +1082,7 @@ function App() {
                               })
                             }
                           >
-                            Aceptar en nueva versión
+                            Activar en nueva versión
                           </button>
                         )}
                       </div>
@@ -1383,21 +1401,20 @@ function App() {
                 );
               })
             )}
-            <h3>Lecciones que propuso</h3>
-            {!selected.proposal.lessons.length ? (
-              <p className="muted">
-                En esta decisión no propuso ninguna lección.
-              </p>
-            ) : (
-              selected.proposal.lessons.map((l, i) => (
-                <div className="event" key={i}>
-                  <p>
-                    <strong>{l.title}</strong>
-                    <br />
-                    {l.body}
-                  </p>
-                </div>
-              ))
+            {/* Solo las decisiones antiguas traen lecciones: ahora salen de las revisiones. */}
+            {selected.proposal.lessons.length > 0 && (
+              <>
+                <h3>Lecciones que propuso</h3>
+                {selected.proposal.lessons.map((l, i) => (
+                  <div className="event" key={i}>
+                    <p>
+                      <strong>{l.title}</strong>
+                      <br />
+                      {l.body}
+                    </p>
+                  </div>
+                ))}
+              </>
             )}
             <h3>Revisión posterior</h3>
             <p className="preserve">

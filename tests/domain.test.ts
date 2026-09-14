@@ -8,6 +8,8 @@ import {
   watchSchema,
   validWatch,
   watchProblem,
+  adoptLessons,
+  MAX_ACTIVE_LESSONS,
   now,
   id,
 } from "../src/domain.ts";
@@ -84,13 +86,57 @@ test("Position, exposure, drawdown and per-order limits", () => {
   s.account.equity = "8000";
   assert.match(orderGuard(s, proposal())!, /pérdida/);
 });
-test("Open and uncertain orders prevent concurrent allocation", () => {
+test("An open order only blocks its own asset, and its money counts as spent", () => {
   const s = state();
-  s.orders = [{ status: "new" }];
-  assert.match(orderGuard(s, proposal())!, /pendientes/);
+  s.settings.symbols = ["AAPL", "MSFT"];
+  s.settings.maxExposureUsd = 20000;
+  s.orders = [
+    {
+      symbol: "MSFT",
+      side: "buy",
+      status: "new",
+      qty: "10",
+      limit_price: "500",
+    },
+  ];
+  assert.equal(orderGuard(s, proposal()), null, "otro activo no se bloquea");
+  s.orders[0].symbol = "AAPL";
+  assert.match(orderGuard(s, proposal())!, /orden abierta de este activo/);
+  // 10 x 500 comprometidos: con 5.100 de efectivo no caben 200 más.
+  s.orders[0].symbol = "MSFT";
+  s.account.cash = "5100";
+  assert.match(orderGuard(s, proposal())!, /Saldo/);
+  s.account.cash = "10000";
+  s.settings.maxExposureUsd = 5100;
+  assert.match(orderGuard(s, proposal())!, /exposición/);
+  s.settings.maxExposureUsd = 20000;
+  s.orders[0].limit_price = "roto";
+  assert.match(orderGuard(s, proposal())!, /órdenes no válidos/);
   s.orders = [];
   s.decisions = [{ status: "unknown" } as any];
   assert.match(orderGuard(s, proposal())!, /intención/);
+});
+test("Lessons enter memory on their own, capped, and always in a new version", () => {
+  const s = state();
+  const first = s.activeVersion;
+  const leccion = (n: number) => ({
+    title: `Lección ${n}`,
+    body: "Una regla concreta con sus límites",
+    source: "revisión",
+  });
+  adoptLessons(s, [leccion(0)], "Primera");
+  assert.notEqual(s.activeVersion, first);
+  assert.equal(s.lessons[0].status, "accepted");
+  assert.deepEqual(s.versions.at(-1)!.lessonIds, [s.lessons[0].id]);
+  for (let n = 1; n <= MAX_ACTIVE_LESSONS; n++)
+    adoptLessons(s, [leccion(n)], `Lección ${n}`);
+  const activas = s.lessons.filter((l) => l.status === "accepted");
+  assert.equal(activas.length, MAX_ACTIVE_LESSONS);
+  assert.equal(s.lessons[0].status, "retired", "sale la más antigua");
+  assert.equal(s.versions.at(-1)!.lessonIds.length, MAX_ACTIVE_LESSONS);
+  const versiones = s.versions.length;
+  assert.equal(adoptLessons(s, [], "Nada"), null);
+  assert.equal(s.versions.length, versiones, "sin lecciones no hay versión");
 });
 test("Daily order budget counts submissions regardless of final status", () => {
   const s = state();

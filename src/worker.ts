@@ -7,6 +7,7 @@ import {
   configured,
   snapshot,
   dailyBars,
+  intradayBars,
   marketNews,
 } from "./alpaca.ts";
 import { decide, review, modelConfigured } from "./model.ts";
@@ -17,7 +18,12 @@ import {
   limitPriceString,
   type Quote,
 } from "./domain.ts";
-import { analyse, type Analysis } from "./market.ts";
+import {
+  analyse,
+  intradaySummary,
+  type Analysis,
+  type Intraday,
+} from "./market.ts";
 import { sendTelegram, telegramConfigured } from "./telegram.ts";
 import {
   decisionNotice,
@@ -38,6 +44,8 @@ import {
   applyReview,
   failJob,
   queueNewsBeforeOpen,
+  queueSessionScan,
+  applyIntraday,
 } from "./agent.ts";
 import { sessionOpen, todayStarted, newYorkDate } from "./clock.ts";
 // One worker owns the market connection and outbox, including across rolling restarts.
@@ -229,6 +237,24 @@ async function analysisStep() {
       );
   }
   if (Object.keys(fresh).length) await change((s) => applyAnalysis(s, fresh));
+  // Las velas de 5 minutos van después: si fallan, el análisis diario ya está
+  // guardado.
+  const rawIntraday = await intradayBars(symbols);
+  const intraday: Record<string, Intraday> = {};
+  for (const symbol of symbols) {
+    // Fuera de la sesión el precio del momento puede ser de antes de la
+    // apertura o de después del cierre: manda el último cierre de la sesión.
+    const price = session.open ? (state.quotes[symbol]?.price ?? 0) : 0;
+    const summary = intradaySummary(
+      rawIntraday[symbol] ?? [],
+      price,
+      "alpaca sip 5Min",
+      new Date(t).toISOString(),
+    );
+    if (summary) intraday[symbol] = summary;
+  }
+  if (Object.keys(intraday).length)
+    await change((s) => applyIntraday(s, intraday));
 }
 async function brokerStep() {
   if (configured() && Date.now() - lastSync > 30000) {
@@ -242,6 +268,7 @@ async function brokerStep() {
         const antes = new Map(s.decisions.map((d) => [d.id, d.status]));
         applySnapshot(s, x);
         queueNewsBeforeOpen(s);
+        queueSessionScan(s);
         if (recuperada)
           log(s, "market", "Alpaca vuelve a sincronizar la cuenta.");
         return s.decisions

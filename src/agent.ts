@@ -7,13 +7,14 @@ import {
   watchState,
   orderGuard,
   EVENT_ATTEMPTS,
+  adoptLessons,
   type State,
   type Decision,
   type Quote,
   type proposalSchema,
 } from "./domain.ts";
 import type { z } from "zod";
-import type { Analysis } from "./market.ts";
+import type { Analysis, Intraday } from "./market.ts";
 import { mergeStories, summarise, pendingRefs } from "./news.ts";
 import { sessionOpen, PRE_OPEN_MINUTES } from "./clock.ts";
 // Worker state transitions, kept free of I/O so they can be tested directly.
@@ -164,19 +165,20 @@ export function claimJob(s: State, ready: boolean, t = Date.now()): Job | null {
     t - Date.parse(s.lastDecision) < s.settings.cooldownSeconds * 1000
   )
     return null;
-  // Revisar una espera que ya tiene una decisión posterior no aporta nada: la
-  // situación se volvió a evaluar. Solo gasta una llamada y repite lecciones.
-  const last = s.decisions.at(-1);
+  // Solo se revisa lo que llegó a enviar una orden: el agente aprende de
+  // resultados reales. Revisar esperas gastaba llamadas y producía lecciones de
+  // prudencia que acababan frenándolo.
   for (const d of s.decisions)
     if (
-      d !== last &&
+      !d.orderId &&
       !d.review &&
       !d.reviewSkipped &&
-      d.proposal.action === "wait" &&
       Date.parse(d.reviewAt) <= t
     )
       d.reviewSkipped =
-        "Hubo una decisión posterior, así que revisar esta espera no aporta nada nuevo.";
+        d.proposal.action === "wait"
+          ? "Las esperas no se revisan: el agente aprende de operaciones reales."
+          : "No llegó a enviarse ninguna orden, así que no hay resultado que revisar.";
   // Los eventos van antes que las revisiones. Una vigilancia cumplida en la
   // apertura no puede esperar detrás de revisiones atrasadas.
   const event = s.queue[0];
@@ -273,14 +275,9 @@ export function applyDecision(
           createdAt: new Date(t).toISOString(),
           decisionId: d.id,
         });
-  for (const l of p.lessons)
-    s.lessons.push({
-      ...l,
-      id: id(),
-      status: "proposed",
-      createdAt: new Date(t).toISOString(),
-      decisionId: d.id,
-    });
+  // Las lecciones salen solo de las revisiones, que ven el resultado. Una
+  // decisión tiene delante noticias de terceros, y de ahí no debe nacer una
+  // regla que entre sola en la memoria.
   // Las referencias se resuelven contra la misma lista que el agente tuvo
   // delante, no contra la de ahora: entre medias pueden haber llegado noticias.
   const vistas = pendingRefs(job.state.stories ?? []);
@@ -323,14 +320,12 @@ export function applyReview(
       ? (job.state.quotes[due.proposal.symbol]?.price ?? null)
       : null,
   };
-  for (const l of parsed.lessons)
-    s.lessons.push({
-      ...l,
-      id: id(),
-      status: "proposed",
-      createdAt: new Date(t).toISOString(),
-      decisionId: due.id,
-    });
+  adoptLessons(
+    s,
+    parsed.lessons.map((l) => ({ ...l, decisionId: due.id })),
+    `Lecciones de la revisión de ${due.proposal.action === "buy" ? "la compra" : "la venta"} de ${due.proposal.symbol ?? "un activo"}`,
+    t,
+  );
   s.usage.push({ at: new Date(t).toISOString(), tokens });
   s.modelJob = null;
   log(s, "review", `Revisión completada: ${due.id}`);
@@ -363,6 +358,34 @@ export function applyAnalysis(
         `${symbol}: ${a.barsDiscarded} ${a.barsDiscarded === 1 ? "sesión descartada" : "sesiones descartadas"} porque el proveedor las dio con datos imposibles.`,
       );
   void t;
+}
+// Las velas de 5 minutos se sustituyen enteras: solo interesa la última sesión.
+export function applyIntraday(s: State, fresh: Record<string, Intraday>) {
+  const kept: Record<string, Intraday> = {};
+  for (const symbol of s.settings.symbols) {
+    const next = fresh[symbol] ?? s.intraday?.[symbol];
+    if (next) kept[symbol] = next;
+  }
+  s.intraday = kept;
+}
+export const SCAN_EVERY_MINUTES = 30,
+  SCAN_STOP_BEFORE_CLOSE_MINUTES = 15,
+  SCAN_REASON = "Revisión periódica del mercado";
+// Con la sesión abierta, el agente mira el mercado al menos cada 30 minutos
+// aunque no haya noticias ni vigilancias. Antes solo se despertaba por eventos y
+// podía pasar la sesión entera sin evaluar nada. Cerca del cierre no se abre
+// una operación que no daría tiempo a gestionar.
+export function queueSessionScan(s: State, t = Date.now()) {
+  if (s.paused || s.queue.length || !sessionOpen(s, t)) return false;
+  const cierre = Date.parse(s.market.nextClose!);
+  if (cierre - t < SCAN_STOP_BEFORE_CLOSE_MINUTES * 60000) return false;
+  if (
+    s.lastDecision &&
+    t - Date.parse(s.lastDecision) < SCAN_EVERY_MINUTES * 60000
+  )
+    return false;
+  enqueue(s, SCAN_REASON);
+  return true;
 }
 
 // Guarda las noticias nuevas y despierta al agente una sola vez por tanda.

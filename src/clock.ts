@@ -61,6 +61,20 @@ export function marketClock(s: Market, t = Date.now()) {
       open && Number.isFinite(nextClose) ? texto(nextClose, NEW_YORK) : null,
   };
 }
+// La sesión normal va de 09:30 a 16:00 en Nueva York, en minutos desde medianoche.
+export const SESSION_OPEN_MINUTE = 570,
+  SESSION_CLOSE_MINUTE = 960;
+export function newYorkMinutes(t: number | string) {
+  const partes = new Intl.DateTimeFormat("en-GB", {
+    timeZone: NEW_YORK,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(t));
+  const valor = (tipo: string) =>
+    Number(partes.find((x) => x.type === tipo)?.value);
+  return valor("hour") * 60 + valor("minute");
+}
 // Si la sesión de hoy ya ha empezado en Nueva York. Antes de la apertura, una
 // vela con la fecha de hoy solo puede traer operaciones previas a la sesión.
 export function todayStarted(s: Market, t = Date.now()) {

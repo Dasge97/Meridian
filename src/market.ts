@@ -1,6 +1,11 @@
 // Análisis técnico a partir de velas diarias. Sin entrada ni salida: se calcula
 // sobre lo que le llega, para poder probarlo sin red ni base de datos.
-import { newYorkDate } from "./clock.ts";
+import {
+  newYorkDate,
+  newYorkMinutes,
+  SESSION_OPEN_MINUTE,
+  SESSION_CLOSE_MINUTE,
+} from "./clock.ts";
 export type Bar = {
   t: string;
   o: number;
@@ -205,5 +210,72 @@ export function analyse(
     barsUsed: bars.length,
     barsDiscarded: discarded,
     source,
+  };
+}
+// Lo que ha pasado dentro de la última sesión, en velas de 5 minutos. Con solo
+// velas diarias lo que ve el agente apenas cambia en toda la jornada.
+export type Intraday = {
+  at: string;
+  date: string;
+  source: string;
+  bars: Bar[];
+  open: number;
+  high: number;
+  low: number;
+  last: number;
+  vwap: number | null;
+  changeFromOpenPct: number | null;
+  change30mPct: number | null;
+  change60mPct: number | null;
+  positionInDayRangePct: number | null;
+  barsUsed: number;
+};
+export const INTRADAY_KEPT = 12;
+// Alpaca también da velas de antes de la apertura y después del cierre. Tienen
+// poco volumen y precios poco representativos, así que se dejan fuera. El precio
+// del momento solo se usa con la sesión abierta; si no, manda el último cierre.
+export function intradaySummary(
+  raw: unknown[],
+  price: number,
+  source: string,
+  at = new Date().toISOString(),
+): Intraday | null {
+  const sesion = cleanBars(raw).bars.filter((b) => {
+    const minuto = newYorkMinutes(b.t);
+    return minuto >= SESSION_OPEN_MINUTE && minuto < SESSION_CLOSE_MINUTE;
+  });
+  const ultima = sesion.at(-1);
+  if (!ultima) return null;
+  const date = newYorkDate(ultima.t);
+  const bars = sesion.filter((b) => newYorkDate(b.t) === date);
+  const precio = Number.isFinite(price) && price > 0 ? price : ultima.c;
+  const high = Math.max(...bars.map((b) => b.h));
+  const low = Math.min(...bars.map((b) => b.l));
+  const volumen = bars.reduce((a, b) => a + b.v, 0);
+  // Precio medio del día ponderado por volumen.
+  const vwap =
+    volumen > 0
+      ? bars.reduce((a, b) => a + ((b.h + b.l + b.c) / 3) * b.v, 0) / volumen
+      : null;
+  const hace = (velas: number) =>
+    bars.length > velas ? bars.at(-1 - velas)!.c : null;
+  const cambio = (desde: number | null) =>
+    desde !== null && desde > 0 ? round((precio / desde - 1) * 100) : null;
+  return {
+    at,
+    date,
+    source,
+    bars: bars.slice(-INTRADAY_KEPT),
+    open: bars[0].o,
+    high,
+    low,
+    last: precio,
+    vwap: round(vwap),
+    changeFromOpenPct: cambio(bars[0].o),
+    change30mPct: cambio(hace(6)),
+    change60mPct: cambio(hace(12)),
+    positionInDayRangePct:
+      high > low ? round(((precio - low) / (high - low)) * 100) : null,
+    barsUsed: bars.length,
   };
 }

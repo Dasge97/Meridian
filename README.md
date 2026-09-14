@@ -31,13 +31,13 @@ El agente puede dejarse vigilancias: «si el precio llega a X, vuelve a analizar
 | Área        | Funcionalidad                                                                        |
 | ----------- | ------------------------------------------------------------------------------------ |
 | Panel       | Patrimonio, posiciones, conexión, horario de la bolsa, llamadas y actividad          |
-| Mercado     | Velas diarias consolidadas, resumen de la sesión, indicadores y noticias             |
+| Mercado     | Velas diarias y de 5 minutos, indicadores, resumen de la sesión y noticias           |
 | Avisos      | Bot de Telegram que cuenta qué hace el agente y por qué, solo cuando importa         |
 | Decisiones  | Contexto guardado, hipótesis, versión, orden y revisión posterior                    |
 | Vigilancias | Precio ≤ / ≥, caducidad, invalidación, activación única y cancelación                |
-| Aprendizaje | Lecciones propuestas por el agente y conocimiento aportado por el propietario        |
-| Evolución   | Aprobar/descartar lecciones, editar instrucciones y recuperar versiones              |
-| Ejecución   | Órdenes limitadas de acciones enteras en Alpaca Paper, durante mercado abierto       |
+| Aprendizaje | Lecciones que el agente saca de sus operaciones y adopta solo, hasta 15 activas      |
+| Evolución   | Versiones automáticas, descartar lecciones, editar instrucciones y recuperar versión |
+| Ejecución   | Órdenes limitadas de acciones enteras en Alpaca Paper, varias abiertas a la vez      |
 | Controles   | Lista de activos, efectivo disponible, exposición, órdenes/día, llamadas/día y pausa |
 | Operación   | Acceso privado, PostgreSQL persistente, Docker Compose y proceso independiente       |
 
@@ -47,19 +47,21 @@ El agente puede dejarse vigilancias: «si el precio llega a X, vuelve a analizar
 flowchart TD
   A[Datos de mercado IEX] --> B[Vigilancias persistentes]
   B -->|Condición cumplida| C[Cola de eventos]
-  D[Orden ejecutada o petición manual] --> C
+  D[Orden ejecutada, revisión cada 30 min o petición manual] --> C
   C --> E[Agente con memoria versionada]
   E --> F[Esperar y crear vigilancias]
   F --> B
   E --> G[Validar límites]
   G --> H[Alpaca Paper]
   H --> D
-  E --> I[Historial y revisión posterior]
-  I --> J[Lecciones propuestas]
-  J -->|Aprobación del propietario| E
+  H --> I[Revisión de la operación]
+  I --> J[Lecciones adoptadas en nueva versión]
+  J --> E
 ```
 
 No hay un cron que decida comprar a una hora concreta. El worker mantiene un WebSocket de operaciones IEX, comprueba condiciones aproximadamente cada 2 segundos y sincroniza la cuenta cada 30 segundos. Esos intervalos son mantenimiento: las llamadas al modelo se activan por eventos o por revisiones pendientes. Mercado, bróker, modelo, velas y noticias corren en bucles separados, así que una llamada al modelo no interrumpe la comprobación de condiciones. Aun así, **no es un sistema de alta frecuencia**.
+
+Con la bolsa abierta, el agente evalúa el mercado al menos cada 30 minutos aunque no haya noticias ni vigilancias. Sus instrucciones le piden buscar oportunidades concretas cada sesión, sin cuotas de operaciones.
 
 Con la bolsa cerrada el agente no se despierta por noticias ni por vigilancias: no podría operar. Las noticias se guardan y se comentan juntas en la media hora previa a la apertura.
 
@@ -67,7 +69,7 @@ Las vigilancias siempre **reevalúan**, no ejecutan planes ciegamente. El agente
 
 ### Aprender no significa reentrenar
 
-Esta versión emplea memoria y versiones de instrucciones; no modifica los pesos del modelo. Las revisiones generan **hipótesis de aprendizaje**, no verdades demostradas. Solo las lecciones aceptadas se incluyen en la memoria activa. Se conservan decisiones recientes como experiencias, aunque sus conclusiones no estén aprobadas. La revisión distingue calidad de proceso, movimiento del precio y ejecución real de la orden.
+Esta versión emplea memoria y versiones de instrucciones; no modifica los pesos del modelo. Solo se revisan las decisiones que llegaron a enviar una orden. Esas revisiones generan **hipótesis de aprendizaje**, no verdades demostradas, y el agente las adopta sin esperar al propietario. Protecciones: como mucho 15 lecciones activas, la más antigua se retira al pasar el tope; la revisión no ve las noticias, para que ninguna regla nazca de un titular; y cada cambio crea una versión que se puede deshacer. La revisión distingue calidad de proceso, movimiento del precio y ejecución real de la orden.
 
 ## Inicio rápido
 
@@ -117,7 +119,7 @@ Abre el panel, inicia sesión y revisa **Configuración**. Verifica que la cuent
 5. Crea una vigilancia con una condición cercana al precio actual durante la sesión de mercado; comprueba que se activa una sola vez.
 6. Si propone una orden, compara estado e identificador con Alpaca. Si no propone operar, no se considera un fallo.
 7. Pausa y verifica que no se crean nuevas órdenes. Las ya enviadas requieren cancelación explícita.
-8. Añade una lección, acéptala y verifica la nueva versión. Recupera la anterior para comprobar la reversibilidad.
+8. Aporta una lección desde el panel y verifica que entra sola en una nueva versión. Recupera la anterior para comprobar la reversibilidad.
 9. Reinicia los contenedores y verifica la persistencia del historial y las vigilancias.
 
 ## Desarrollo y pruebas
@@ -147,7 +149,8 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 
 - Solo acciones/ETF estadounidenses, unidades enteras, órdenes limitadas `day`, sin cortos ni margen. No incluye cripto, fracciones, datos fundamentales ni backtesting.
 - Las noticias son titulares y resúmenes de terceros. No se verifican, y el agente las recibe con el aviso de que pueden estar equivocadas o desfasadas.
-- El análisis es técnico y sobre velas diarias: medias, variaciones, volatilidad, rango de 52 semanas y volumen relativo. No hay intradía, ni patrones de velas, ni comparación con un índice.
+- El análisis es técnico: velas diarias con medias, variaciones, volatilidad, rango de 52 semanas y volumen relativo, y la última sesión en velas de 5 minutos con precio medio ponderado por volumen y cambios a 30 y 60 minutos. No hay patrones de velas ni comparación con un índice.
+- Cada llamada al modelo lleva hasta unos 30.000 tokens de contexto. Con 20 activos y una revisión cada 30 minutos, calcula del orden de un millón de tokens al día. Pon un límite de gasto en el proveedor del modelo.
 - El precio del momento llega por IEX, que tiene cobertura parcial. Los precios caducan para operar tras 90 segundos; la ausencia de operaciones recientes puede bloquear decisiones legítimas. El histórico diario sí es consolidado.
 - El proveedor de datos devuelve de vez en cuando velas con valores imposibles. Se descartan y se cuenta cuántas, pero ningún filtro detecta un error pequeño y verosímil.
 - El panel muestra patrimonio y posiciones, no atribución contable por estrategia ni comparación con un índice. Cambiar el saldo del simulador afecta la variación mostrada.
@@ -155,7 +158,8 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 - La pausa no liquida posiciones ni revoca una petición HTTP ya en vuelo. La cancelación solicita a Alpaca cancelar todas las órdenes de la cuenta; confirma después su estado.
 - Un único propietario y un único worker activo. El estado vive en dos filas JSONB de PostgreSQL: sencillo para un laboratorio personal, no pensado para múltiples usuarios.
 - El historial está acotado a propósito: 2.000 decisiones, 1.000 eventos y una curva de patrimonio submuestreada por hora pasados 3 días. El contexto guardado solo se conserva en las 500 decisiones más recientes. Exporta o copia la base de datos si quieres conservarlo todo.
-- Las revisiones vencidas se procesan cuando el agente está activo, con el mismo límite diario y espera mínima. No son revisiones a una hora exacta. Cada revisión admite hasta 3 intentos.
+- Las revisiones vencidas se procesan cuando el agente está activo y no hay eventos en cola, con el mismo límite diario y espera mínima. No son revisiones a una hora exacta. Cada revisión admite hasta 3 intentos.
+- Las lecciones automáticas pueden equivocarse: una operación aislada no demuestra una regla. Revisa de vez en cuando la pestaña Aprendizaje y descarta lo que no tenga sentido.
 - No hay motor de ejecución de código generado por IA. El agente solo puede proponer acciones tipadas y vigilancias dentro de los límites.
 
 ## Estructura

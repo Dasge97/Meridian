@@ -10,7 +10,9 @@ El historial está acotado. Se conservan 2.000 decisiones, 1.000 eventos, 500 vi
 
 ## Eventos y vigilia
 
-El worker ejecuta cinco bucles independientes en el mismo proceso. El primero atiende el mercado cada dos segundos: recibe trades IEX, conserva el más reciente por activo, caduca o invalida vigilancias y encola las condiciones cumplidas. El segundo atiende al bróker cada dos segundos: sincroniza la cuenta cada 30 segundos, reconcilia órdenes ambiguas y envía las intenciones aprobadas. El tercero llama al modelo. El cuarto descarga velas diarias cada 5 minutos y el quinto pide noticias cada 30 minutos. Separarlos evita que una llamada al modelo de hasta 45 segundos, o una petición lenta a Alpaca, dejen de comprobar las condiciones de precio durante ese tiempo.
+El worker ejecuta cinco bucles independientes en el mismo proceso. El primero atiende el mercado cada dos segundos: recibe trades IEX, conserva el más reciente por activo, caduca o invalida vigilancias y encola las condiciones cumplidas. El segundo atiende al bróker cada dos segundos: sincroniza la cuenta cada 30 segundos, reconcilia órdenes ambiguas y envía las intenciones aprobadas. El tercero llama al modelo. El cuarto descarga velas diarias y de 5 minutos cada 5 minutos y el quinto pide noticias cada 30 minutos.
+
+Con la sesión abierta, el bucle del bróker encola una revisión periódica del mercado si el agente lleva 30 minutos sin evaluar y no hay nada en cola. Deja de hacerlo 15 minutos antes del cierre, porque no daría tiempo a gestionar una operación nueva. Antes el agente solo se despertaba por eventos y podía pasar la sesión entera sin evaluar nada. Separarlos evita que una llamada al modelo de hasta 45 segundos, o una petición lenta a Alpaca, dejen de comprobar las condiciones de precio durante ese tiempo.
 
 Si la sincronización con Alpaca falla, se registra el motivo una sola vez por racha, y otra vez cuando vuelve a funcionar.
 
@@ -32,7 +34,9 @@ El WebSocket reconecta cada 10 segundos si falla. La sincronización HTTP aporta
 
 ## Datos de mercado y análisis
 
-El worker descarga velas diarias consolidadas del feed `sip` de Alpaca, que cubre todo el mercado. El WebSocket de IEX solo ve su propio parqué: sirve para el precio del momento, no para medir tendencia ni volumen. La descarga se repite cada 5 minutos en su propio bucle y cubre unos 400 días naturales.
+El worker descarga velas diarias consolidadas del feed `sip` de Alpaca, que cubre todo el mercado. El WebSocket de IEX solo ve su propio parqué: sirve para el precio del momento, no para medir tendencia ni volumen. La descarga se repite cada 5 minutos en su propio bucle y cubre unos 400 días naturales. Alpaca pagina las velas, y se siguen hasta 10 páginas para que no falten activos.
+
+En el mismo bucle se descargan velas de 5 minutos de los últimos 4 días, también del feed `sip`, que en esta cuenta llegan casi en tiempo real. Solo se usan las de la sesión normal, de 09:30 a 16:00 en Nueva York, y solo las del último día con sesión. De ellas salen apertura, máximo, mínimo, último precio, precio medio ponderado por volumen, cambio desde la apertura y en 30 y 60 minutos, y posición en el rango del día. Se guardan las 12 velas más recientes. Fuera de la sesión se usa el último cierre en lugar del precio del momento, que puede ser de antes de la apertura o de después del cierre.
 
 De esas velas salen, por activo: medias de 20, 50 y 200 sesiones, distancia del precio a cada media, variación a 1, 5 y 20 sesiones, rango verdadero medio de 14 sesiones como medida de volatilidad, máximo y mínimo de 52 semanas, posición dentro de ese rango, y volumen de la última sesión completa frente a su media de 20. Se guardan también las 20 velas más recientes.
 
@@ -74,11 +78,15 @@ El aviso de un problema enlaza al panel usando `APP_ORIGIN`. El repositorio es p
 
 ## Modelo y memoria
 
-Los eventos en cola van antes que las revisiones vencidas: una vigilancia cumplida en la apertura no espera detrás de revisiones atrasadas. Una espera que ya tiene una decisión posterior no se revisa, porque la situación se volvió a evaluar; queda anotado el motivo. Se reserva el trabajo y se incrementa el contador diario antes de llamar al modelo. La llamada se realiza fuera de las transacciones de PostgreSQL, por lo que el panel puede pausar o cambiar parámetros durante una evaluación. Al terminar se revisan configuración, versión, pausa y límites; una propuesta obsoleta no se envía.
+Los eventos en cola van antes que las revisiones vencidas: una vigilancia cumplida en la apertura no espera detrás de revisiones atrasadas. Solo se revisan las decisiones que llegaron a enviar una orden: el agente aprende de resultados reales. Las esperas y las propuestas bloqueadas quedan anotadas con el motivo por el que no se revisan. Revisar esperas gastaba llamadas y producía lecciones de prudencia que acababan frenando al agente. Se reserva el trabajo y se incrementa el contador diario antes de llamar al modelo. La llamada se realiza fuera de las transacciones de PostgreSQL, por lo que el panel puede pausar o cambiar parámetros durante una evaluación. Al terminar se revisan configuración, versión, pausa y límites; una propuesta obsoleta no se envía.
 
 Se acepta únicamente JSON validado. El contexto incluye cartera, precios, el horario de la bolsa ya calculado, el análisis por activo, las noticias recientes, límites, vigilancias, lecciones de la versión activa y las últimas 8 decisiones. Una respuesta cortada por el límite de tokens se detecta al recibirla y se explica como tal, en lugar de fallar después como JSON mal formado. Su tamaño está acotado a 60.000 caracteres: si la memoria aprobada crece por encima, se recortan primero las lecciones más antiguas y el cuerpo de cada una, después el número de decisiones recientes, y por último las velas en crudo. Los indicadores calculados no se quitan nunca: ocupan poco y son lo que sustituye al histórico completo. El contexto indica cuántas lecciones se han omitido. No hay búsqueda vectorial ni navegación web autónoma. La fuente de una lección externa es una referencia aportada por el usuario, no una página descargada ni verificada automáticamente.
 
-Las revisiones posteriores reciben decisión, cotizaciones disponibles, posiciones y las 20 órdenes más recientes, con el mismo tope de tamaño. Sus lecciones quedan propuestas hasta aprobación del propietario. Una aprobación o rechazo crea una versión de memoria/instrucciones. Recuperar una versión restaura sus lecciones activas.
+Las revisiones posteriores reciben decisión, cotizaciones disponibles, posiciones y las 20 órdenes más recientes, con el mismo tope de tamaño. No reciben las noticias que tenía la decisión.
+
+Las lecciones entran solas en la memoria activa, sin aprobación del propietario. Solo salen de revisiones, nunca de una decisión: una decisión tiene delante titulares de terceros, y de ahí no debe nacer una regla permanente. Hay como mucho 15 lecciones activas; al pasar el tope, la más antigua pasa a retirada. Cada adopción crea una versión de memoria/instrucciones. El propietario puede aportar conocimiento, que también entra directamente, descartar cualquier lección o recuperar una versión anterior, que restaura sus lecciones activas.
+
+El contexto de una decisión está acotado a 100.000 caracteres, unos 30.000 tokens.
 
 Errores de evaluación se registran con su motivo concreto: el campo del esquema que no cuadra, que el modelo no respondió a tiempo, o el error del proveedor. El texto se recorta a 300 caracteres. No se guardan claves ni respuestas crudas del proveedor. El intento consume presupuesto. Un evento fallido vuelve a la cola una vez; si falla de nuevo se descarta y hace falta otra solicitud. Una revisión admite 3 intentos. Si el modelo omite si una noticia importa, se toma como que no importa, en lugar de perder la evaluación entera. Un reinicio durante una llamada puede perder su resultado, pero conserva el intento reservado.
 
@@ -94,7 +102,7 @@ Las transiciones de estado del worker viven en `src/agent.ts` y no hacen entrada
 
 El precio límite se envía con dos decimales, o con cuatro por debajo de un dólar, que es lo que acepta Alpaca.
 
-Si el envío o su confirmación fallan, marcar `unknown` y pausar. La recuperación consulta por `client_order_id`. Nunca se reenvía a ciegas. Una orden pendiente/ambigua bloquea otras. Se usa advisory lock de PostgreSQL para impedir workers simultáneos.
+Si el envío o su confirmación fallan, marcar `unknown` y pausar. La recuperación consulta por `client_order_id`. Nunca se reenvía a ciegas. Una intención ambigua bloquea las demás. Puede haber varias órdenes abiertas en Alpaca a la vez, pero nunca dos del mismo activo. El dinero de las compras abiertas cuenta como gastado para el efectivo y la exposición. Se usa advisory lock de PostgreSQL para impedir workers simultáneos.
 
 Los límites son controles previos, no garantías de precio final o de pérdida máxima. Una venta requiere acciones suficientes; una compra debe caber en efectivo, exposición y límite por posición. El umbral de pérdida compara patrimonio actual con la primera sincronización; bloquea compras nuevas, no cierra posiciones.
 

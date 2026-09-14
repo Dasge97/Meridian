@@ -21,6 +21,7 @@ import {
   log,
   enqueue,
   watchProblem,
+  adoptLessons,
   UserError,
 } from "./domain.ts";
 import { configured, alpaca, AlpacaError } from "./alpaca.ts";
@@ -229,9 +230,13 @@ app.post("/api/watches/:id/cancel", async (req) => {
 });
 app.post("/api/lessons", async (req) => {
   const l = lessonSchema.parse(req.body);
+  // Lo aporta el propietario: entra directamente en la memoria activa.
   await change((s) => {
-    s.lessons.push({ ...l, id: id(), status: "proposed", createdAt: now() });
-    log(s, "lesson", "Conocimiento externo añadido como propuesta");
+    adoptLessons(
+      s,
+      [l],
+      `Conocimiento aportado por el propietario: ${l.title}`,
+    );
   });
   return { ok: true };
 });

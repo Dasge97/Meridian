@@ -49,21 +49,49 @@ export async function snapshot(symbols: string[]) {
 // Velas diarias consolidadas. El feed sip cubre todo el mercado; el feed iex del
 // WebSocket solo ve su propio parqué y sirve para el precio del momento, no para
 // medir tendencia o volumen.
-export const HISTORY_DAYS = 400;
+export const HISTORY_DAYS = 400,
+  INTRADAY_DAYS = 4,
+  BAR_PAGES_MAX = 10;
+// Alpaca pagina las velas. Con 20 activos y velas de 5 minutos una sola respuesta
+// no las trae todas, y sin seguir las páginas faltarían los últimos activos.
+async function bars(params: Record<string, string>) {
+  const all: Record<string, unknown[]> = {};
+  let token: string | undefined;
+  for (let page = 0; page < BAR_PAGES_MAX; page++) {
+    const query = new URLSearchParams({
+      ...params,
+      limit: "10000",
+      ...(token ? { page_token: token } : {}),
+    });
+    const r = await alpaca("/v2/stocks/bars?" + query, "GET", undefined, true);
+    for (const [symbol, list] of Object.entries(
+      (r?.bars ?? {}) as Record<string, unknown[]>,
+    ))
+      (all[symbol] ??= []).push(...list);
+    token = r?.next_page_token || undefined;
+    if (!token) break;
+  }
+  return all;
+}
 export async function dailyBars(symbols: string[], days = HISTORY_DAYS) {
-  const start = new Date(Date.now() - days * 86400000)
-    .toISOString()
-    .slice(0, 10);
-  const query = new URLSearchParams({
+  return bars({
     symbols: symbols.join(","),
     timeframe: "1Day",
-    limit: "10000",
-    start,
+    start: new Date(Date.now() - days * 86400000).toISOString().slice(0, 10),
     feed: "sip",
     adjustment: "split",
   });
-  const r = await alpaca("/v2/stocks/bars?" + query, "GET", undefined, true);
-  return (r?.bars ?? {}) as Record<string, unknown[]>;
+}
+// Velas de 5 minutos de los últimos días, para ver la sesión por dentro. El feed
+// sip de esta cuenta las da casi en tiempo real.
+export async function intradayBars(symbols: string[], days = INTRADAY_DAYS) {
+  return bars({
+    symbols: symbols.join(","),
+    timeframe: "5Min",
+    start: new Date(Date.now() - days * 86400000).toISOString(),
+    feed: "sip",
+    adjustment: "split",
+  });
 }
 // Noticias de mercado del proveedor. Texto de terceros, nunca instrucciones.
 export async function marketNews(symbols: string[], limit = 30) {

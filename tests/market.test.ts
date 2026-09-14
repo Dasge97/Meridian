@@ -7,6 +7,7 @@ import {
   indicators,
   todayFrom,
   analyse,
+  intradaySummary,
   type Bar,
 } from "../src/market.ts";
 import { newYorkDate } from "../src/clock.ts";
@@ -182,6 +183,40 @@ test("During the session today is partial and volume uses the last complete one"
     3,
     "la sesión a medias no hace parecer bajo el volumen",
   );
+});
+// Vela de 5 minutos del lunes 14 de septiembre de 2026 a la hora de Nueva York.
+const cinco = (hora: string, c: number, v = 100, minutos = 0) =>
+  bar({
+    t: new Date(
+      Date.parse(`2026-09-14T${hora}:00-04:00`) + minutos * 60000,
+    ).toISOString(),
+    o: c,
+    h: c + 0.5,
+    l: c - 0.5,
+    c,
+    v,
+  });
+test("The intraday summary keeps only the regular session of the last day", () => {
+  const raw = [
+    bar({ t: "2026-09-11T15:55:00-04:00", c: 90 }),
+    cinco("08:00", 50, 5), // antes de la apertura
+    // Trece velas seguidas desde las 10:00, de 100 a 112.
+    ...Array.from({ length: 13 }, (_, i) =>
+      cinco("10:00", 100 + i, 100, i * 5),
+    ),
+    cinco("16:30", 200, 5), // después del cierre
+  ];
+  const d = intradaySummary(raw, 0, "prueba", "2026-09-14T15:00:00Z")!;
+  assert.equal(d.date, "2026-09-14");
+  assert.equal(d.barsUsed, 13, "ni la de antes de abrir ni la de después");
+  assert.equal(d.open, 100);
+  assert.equal(d.last, 112, "sin precio del momento manda el último cierre");
+  assert.equal(d.changeFromOpenPct, 12);
+  assert.equal(d.change30mPct, 5.66, "de 106 a 112");
+  assert.equal(d.change60mPct, 12, "de 100 a 112");
+  assert.equal(d.vwap, 106, "volumen igual en todas: la media de cierres");
+  assert.equal(d.bars.length, 12);
+  assert.equal(intradaySummary([cinco("08:00", 50)], 0, "prueba"), null);
 });
 test("Without bars or without a price there are no indicators, and it does not crash", () => {
   const vacio = analyse([], 100, "prueba");

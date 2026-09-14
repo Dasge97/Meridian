@@ -76,7 +76,7 @@ test("Agent receives approved memory and emits validated structured decisions", 
       assert.ok(context.analysis, "falta el análisis en el contexto");
       assert.equal(context.analysis.AAPL.indicators.sma20, 149.5);
       assert.equal(context.analysis.AAPL.barsDiscarded, 1);
-      assert.equal(context.analysis.AAPL.recentBars.length, 20);
+      assert.equal(context.analysis.AAPL.recentBars.length, 10);
       return new Response(
         JSON.stringify({
           choices: [
