@@ -82,14 +82,19 @@ export async function dailyBars(symbols: string[], days = HISTORY_DAYS) {
     adjustment: "split",
   });
 }
-// Velas de 5 minutos de los últimos días, para ver la sesión por dentro. El feed
-// sip de esta cuenta las da casi en tiempo real.
-export async function intradayBars(symbols: string[], days = INTRADAY_DAYS) {
+// Velas de 5 minutos de los últimos días, para ver la sesión por dentro. En esta
+// cuenta el feed sip llega con 15 minutos de retraso; el feed iex llega al
+// momento pero solo cubre su propio parqué.
+export async function intradayBars(
+  symbols: string[],
+  days = INTRADAY_DAYS,
+  feed: "sip" | "iex" = "sip",
+) {
   return bars({
     symbols: symbols.join(","),
     timeframe: "5Min",
     start: new Date(Date.now() - days * 86400000).toISOString(),
-    feed: "sip",
+    feed,
     adjustment: "split",
   });
 }

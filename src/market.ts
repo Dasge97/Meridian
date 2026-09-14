@@ -229,26 +229,44 @@ export type Intraday = {
   change60mPct: number | null;
   positionInDayRangePct: number | null;
   barsUsed: number;
+  // Velas recientes que vienen de IEX porque las del mercado completo aún no han llegado.
+  iexBars?: number;
 };
 export const INTRADAY_KEPT = 12;
 // Alpaca también da velas de antes de la apertura y después del cierre. Tienen
-// poco volumen y precios poco representativos, así que se dejan fuera. El precio
-// del momento solo se usa con la sesión abierta; si no, manda el último cierre.
+// poco volumen y precios poco representativos, así que se dejan fuera.
+// Las velas del mercado completo (sip) llegan con 15 minutos de retraso en esta
+// cuenta. El primer día de uso, a los 14 minutos de abrir aún no había ninguna
+// de la sesión y el agente creía estar mirando la del viernes. Los minutos que
+// faltan se completan con velas de IEX, que llegan al momento pero solo recogen
+// parte del volumen.
 export function intradaySummary(
   raw: unknown[],
   price: number,
   source: string,
   at = new Date().toISOString(),
+  iex: unknown[] = [],
 ): Intraday | null {
-  const sesion = cleanBars(raw).bars.filter((b) => {
+  const enSesion = (b: Bar) => {
     const minuto = newYorkMinutes(b.t);
     return minuto >= SESSION_OPEN_MINUTE && minuto < SESSION_CLOSE_MINUTE;
-  });
+  };
+  const completas = cleanBars(raw).bars.filter(enSesion);
+  const hasta = completas.length ? Date.parse(completas.at(-1)!.t) : -Infinity;
+  const recientes = cleanBars(iex).bars.filter(
+    (b) => enSesion(b) && Date.parse(b.t) > hasta,
+  );
+  const sesion = [...completas, ...recientes];
   const ultima = sesion.at(-1);
   if (!ultima) return null;
   const date = newYorkDate(ultima.t);
   const bars = sesion.filter((b) => newYorkDate(b.t) === date);
-  const precio = Number.isFinite(price) && price > 0 ? price : ultima.c;
+  // El precio del momento solo se compara con la sesión de hoy. Mezclarlo con
+  // la apertura del viernes daba caídas «desde la apertura» que no existían.
+  const precio =
+    Number.isFinite(price) && price > 0 && date === newYorkDate(at)
+      ? price
+      : ultima.c;
   const high = Math.max(...bars.map((b) => b.h));
   const low = Math.min(...bars.map((b) => b.l));
   const volumen = bars.reduce((a, b) => a + b.v, 0);
@@ -277,5 +295,6 @@ export function intradaySummary(
     positionInDayRangePct:
       high > low ? round(((precio - low) / (high - low)) * 100) : null,
     barsUsed: bars.length,
+    iexBars: bars.filter((b) => recientes.includes(b)).length,
   };
 }

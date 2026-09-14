@@ -174,22 +174,45 @@ test("Only decisions that sent an order are reviewed", () => {
   assert.equal(s.decisions.at(-1)!.reviewSkipped, undefined, "aún no le toca");
 });
 test("The market is scanned every half hour during the session", () => {
+  // Lunes 14 de septiembre de 2026 a las 11:00 en Nueva York.
+  const T = Date.parse("2026-09-14T15:00:00Z");
+  const hace = (minutos: number) => new Date(T - minutos * 60000).toISOString();
+  const sesion = {
+    open: true,
+    nextOpen: null,
+    nextClose: "2026-09-14T20:00:00Z",
+  };
   const s = state();
-  assert.equal(queueSessionScan(s), true, "sin evaluaciones previas");
+  s.market = { ...sesion };
+  assert.equal(queueSessionScan(s, T), true, "sin evaluaciones previas");
   assert.equal(s.queue[0].reason, SCAN_REASON);
-  assert.equal(queueSessionScan(s), false, "ya hay algo en cola");
+  assert.equal(queueSessionScan(s, T), false, "ya hay algo en cola");
   s.queue = [];
-  s.lastDecision = new Date(Date.now() - 10 * 60000).toISOString();
-  assert.equal(queueSessionScan(s), false, "evaluó hace 10 minutos");
-  s.lastDecision = new Date(Date.now() - 31 * 60000).toISOString();
-  assert.equal(queueSessionScan(s), true);
+  s.lastDecision = hace(10);
+  assert.equal(queueSessionScan(s, T), false, "evaluó hace 10 minutos");
+  s.lastDecision = hace(31);
+  assert.equal(queueSessionScan(s, T), true);
   s.queue = [];
-  s.market.nextClose = new Date(Date.now() + 10 * 60000).toISOString();
-  assert.equal(queueSessionScan(s), false, "a 10 minutos del cierre no");
-  assert.equal(queueSessionScan(closed(state(), 20)), false, "cerrada no");
+  s.lastDecision = null;
+  assert.equal(
+    queueSessionScan(s, Date.parse("2026-09-14T13:35:00Z")),
+    false,
+    "a los 5 minutos de abrir aún no hay velas de la sesión",
+  );
+  assert.equal(queueSessionScan(s, Date.parse("2026-09-14T13:41:00Z")), true);
+  s.queue = [];
+  assert.equal(
+    queueSessionScan(s, Date.parse("2026-09-14T19:50:00Z")),
+    false,
+    "a 10 minutos del cierre no",
+  );
+  const cerrada = state();
+  cerrada.market = { ...sesion, open: false };
+  assert.equal(queueSessionScan(cerrada, T), false, "cerrada no");
   const pausado = state();
+  pausado.market = { ...sesion };
   pausado.paused = true;
-  assert.equal(queueSessionScan(pausado), false);
+  assert.equal(queueSessionScan(pausado, T), false);
 });
 test("A failed evaluation puts its event back once, then drops it", () => {
   const s = state();

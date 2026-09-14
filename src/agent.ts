@@ -16,7 +16,12 @@ import {
 import type { z } from "zod";
 import type { Analysis, Intraday } from "./market.ts";
 import { mergeStories, summarise, pendingRefs } from "./news.ts";
-import { sessionOpen, PRE_OPEN_MINUTES } from "./clock.ts";
+import {
+  sessionOpen,
+  newYorkMinutes,
+  PRE_OPEN_MINUTES,
+  SESSION_OPEN_MINUTE,
+} from "./clock.ts";
 // Worker state transitions, kept free of I/O so they can be tested directly.
 export type Job = {
   meta: NonNullable<State["modelJob"]>;
@@ -369,6 +374,7 @@ export function applyIntraday(s: State, fresh: Record<string, Intraday>) {
   s.intraday = kept;
 }
 export const SCAN_EVERY_MINUTES = 30,
+  SCAN_START_AFTER_OPEN_MINUTES = 10,
   SCAN_STOP_BEFORE_CLOSE_MINUTES = 15,
   SCAN_REASON = "Revisión periódica del mercado";
 // Con la sesión abierta, el agente mira el mercado al menos cada 30 minutos
@@ -377,6 +383,10 @@ export const SCAN_EVERY_MINUTES = 30,
 // una operación que no daría tiempo a gestionar.
 export function queueSessionScan(s: State, t = Date.now()) {
   if (s.paused || s.queue.length || !sessionOpen(s, t)) return false;
+  // En los primeros minutos todavía no hay velas de la sesión, y la evaluación
+  // se gastaba en decir que faltan datos.
+  if (newYorkMinutes(t) < SESSION_OPEN_MINUTE + SCAN_START_AFTER_OPEN_MINUTES)
+    return false;
   const cierre = Date.parse(s.market.nextClose!);
   if (cierre - t < SCAN_STOP_BEFORE_CLOSE_MINUTES * 60000) return false;
   if (

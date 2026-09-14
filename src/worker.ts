@@ -58,6 +58,7 @@ let stopping = false,
   retryAt = 0,
   lastSync = 0,
   lastAnalysis = 0,
+  lastAnalysisOpen = false,
   lastNews = 0,
   lastTick = 0,
   streamSymbols = "",
@@ -211,9 +212,18 @@ async function submitStep() {
 // Velas diarias e indicadores. Cambian despacio, asi que se piden cada 5 minutos.
 export const ANALYSIS_EVERY_MS = 300000;
 async function analysisStep() {
-  if (!configured() || Date.now() - lastAnalysis < ANALYSIS_EVERY_MS) return;
-  lastAnalysis = Date.now();
+  if (!configured()) return;
   const state = await read();
+  // Al abrir o cerrar la bolsa se recalcula al momento. Si no, la primera
+  // evaluación de la sesión podía usar un análisis de antes de la apertura.
+  const abierta = sessionOpen(state);
+  if (
+    Date.now() - lastAnalysis < ANALYSIS_EVERY_MS &&
+    abierta === lastAnalysisOpen
+  )
+    return;
+  lastAnalysis = Date.now();
+  lastAnalysisOpen = abierta;
   const symbols = state.settings.symbols;
   if (!symbols.length) return;
   const raw = await dailyBars(symbols);
@@ -239,7 +249,10 @@ async function analysisStep() {
   if (Object.keys(fresh).length) await change((s) => applyAnalysis(s, fresh));
   // Las velas de 5 minutos van después: si fallan, el análisis diario ya está
   // guardado.
-  const rawIntraday = await intradayBars(symbols);
+  const [rawIntraday, rawIex] = await Promise.all([
+    intradayBars(symbols),
+    intradayBars(symbols, 1, "iex"),
+  ]);
   const intraday: Record<string, Intraday> = {};
   for (const symbol of symbols) {
     // Fuera de la sesión el precio del momento puede ser de antes de la
@@ -248,8 +261,9 @@ async function analysisStep() {
     const summary = intradaySummary(
       rawIntraday[symbol] ?? [],
       price,
-      "alpaca sip 5Min",
+      "alpaca sip 5Min, últimos minutos de iex",
       new Date(t).toISOString(),
+      rawIex[symbol] ?? [],
     );
     if (summary) intraday[symbol] = summary;
   }

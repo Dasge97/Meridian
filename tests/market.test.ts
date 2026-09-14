@@ -217,6 +217,34 @@ test("The intraday summary keeps only the regular session of the last day", () =
   assert.equal(d.vwap, 106, "volumen igual en todas: la media de cierres");
   assert.equal(d.bars.length, 12);
   assert.equal(intradaySummary([cinco("08:00", 50)], 0, "prueba"), null);
+  // Un día después, el precio del momento no se compara con la sesión del lunes.
+  const vieja = intradaySummary(raw, 150, "prueba", "2026-09-15T15:00:00Z")!;
+  assert.equal(vieja.last, 112);
+  assert.equal(vieja.changeFromOpenPct, 12);
+});
+test("Recent minutes missing from the delayed feed are filled with IEX bars", () => {
+  const sip = Array.from({ length: 13 }, (_, i) =>
+    cinco("10:00", 100 + i, 100, i * 5),
+  );
+  const iex = [
+    cinco("10:00", 999, 1, 60), // la de las 11:00 ya está en sip: no entra
+    cinco("10:00", 113, 10, 65), // la de las 11:05 aún no ha llegado por sip
+  ];
+  const d = intradaySummary(sip, 0, "prueba", "2026-09-14T15:10:00Z", iex)!;
+  assert.equal(d.barsUsed, 14);
+  assert.equal(d.iexBars, 1);
+  assert.equal(d.last, 113);
+  assert.equal(d.high, 113.5, "la vela repetida de IEX no altera el máximo");
+  // A primera hora sip aún no trae nada de la sesión de hoy.
+  const temprano = intradaySummary(
+    [bar({ t: "2026-09-11T15:55:00-04:00", c: 90 })],
+    0,
+    "prueba",
+    "2026-09-14T13:40:00Z",
+    [cinco("09:30", 100), cinco("09:30", 101, 100, 5)],
+  )!;
+  assert.equal(temprano.date, "2026-09-14", "no se queda con el viernes");
+  assert.equal(temprano.iexBars, 2);
 });
 test("Without bars or without a price there are no indicators, and it does not crash", () => {
   const vacio = analyse([], 100, "prueba");
