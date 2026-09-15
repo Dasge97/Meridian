@@ -11,8 +11,10 @@ export function describeFailure(e: unknown) {
         .join("; ") +
       ")"
     );
+  // Alpaca y el modelo ya lanzan su propio mensaje con quién tardó. Este es el
+  // caso genérico: antes decía «el modelo» también cuando era Alpaca.
   if (e instanceof Error && e.name === "TimeoutError")
-    return "el modelo no respondió a tiempo";
+    return "una petición externa no respondió a tiempo";
   const texto = e instanceof Error ? e.message : String(e);
   return texto.slice(0, 300) || "error desconocido";
 }

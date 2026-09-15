@@ -6,6 +6,14 @@ export class AlpacaError extends Error {
 export const PAPER = "https://paper-api.alpaca.markets";
 export const configured = () =>
   Boolean(process.env.ALPACA_KEY_ID && process.env.ALPACA_SECRET_KEY);
+// Alpaca no respondió o la conexión falló. El mensaje dice qué petición fue,
+// sin la parte de la consulta, que puede llevar identificadores largos.
+export class AlpacaUnavailable extends Error {}
+// El 14/09/2026 la sincronización falló casi sin parar la última hora de sesión
+// con el límite de 15 s, y el registro no decía qué petición tardaba.
+export const ALPACA_TIMEOUT_MS = 30000,
+  ALPACA_RETRY_DELAY_MS = 1000,
+  ALPACA_SLOW_MS = 5000;
 export async function alpaca(
   path: string,
   method = "GET",
@@ -13,18 +21,46 @@ export async function alpaca(
   data = false,
 ) {
   if (!configured()) throw new Error("Alpaca Paper sin configurar");
-  const r = await fetch((data ? "https://data.alpaca.markets" : PAPER) + path, {
-    method,
-    headers: {
-      "APCA-API-KEY-ID": process.env.ALPACA_KEY_ID!,
-      "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY!,
-      "Content-Type": "application/json",
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!r.ok) throw new AlpacaError(r.status);
-  return r.status === 204 ? null : r.json();
+  const peticion = `${method} ${path.split("?")[0]}`;
+  // Solo se reintenta lo que no cambia nada en Alpaca. Reenviar o cancelar una
+  // orden sin saber si la primera llegó podría duplicarla.
+  const intentos = method === "GET" ? 2 : 1;
+  for (let intento = 1; ; intento++) {
+    const inicio = Date.now();
+    let motivo: string;
+    try {
+      const r = await fetch(
+        (data ? "https://data.alpaca.markets" : PAPER) + path,
+        {
+          method,
+          headers: {
+            "APCA-API-KEY-ID": process.env.ALPACA_KEY_ID!,
+            "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY!,
+            "Content-Type": "application/json",
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(ALPACA_TIMEOUT_MS),
+        },
+      );
+      const tardo = Date.now() - inicio;
+      if (tardo > ALPACA_SLOW_MS)
+        console.warn(`Alpaca lenta: ${peticion} tardó ${tardo} ms`);
+      if (r.ok) return r.status === 204 ? null : await r.json();
+      if (r.status < 500 || intento >= intentos)
+        throw new AlpacaError(r.status);
+      motivo = `respondió HTTP ${r.status}`;
+    } catch (e) {
+      if (e instanceof AlpacaError) throw e;
+      motivo =
+        e instanceof Error && e.name === "TimeoutError"
+          ? `no respondió en ${ALPACA_TIMEOUT_MS / 1000} s`
+          : `falló la conexión (${e instanceof Error ? e.message : String(e)})`;
+      if (intento >= intentos)
+        throw new AlpacaUnavailable(`Alpaca ${motivo} en ${peticion}`);
+    }
+    console.warn(`Alpaca ${motivo} en ${peticion}; se reintenta`);
+    await new Promise((r) => setTimeout(r, ALPACA_RETRY_DELAY_MS));
+  }
 }
 export async function snapshot(symbols: string[]) {
   // Cuenta, posiciones y órdenes son obligatorias: los límites dependen de ellas.

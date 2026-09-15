@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { alpaca, PAPER, AlpacaError } from "../src/alpaca.ts";
+import {
+  alpaca,
+  PAPER,
+  AlpacaError,
+  AlpacaUnavailable,
+} from "../src/alpaca.ts";
 import { decide } from "../src/model.ts";
 import { initialState, proposalSchema } from "../src/domain.ts";
 import { describeFailure } from "../src/worker-failures.ts";
@@ -21,6 +26,57 @@ test("Broker requests cannot select a live endpoint; provider errors retain stat
       () => alpaca("/v2/orders:by_client_order_id?client_order_id=test"),
       (e: unknown) => e instanceof AlpacaError && e.status === 404,
     );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("A slow or failing Alpaca query is retried once and says which request failed", async () => {
+  process.env.ALPACA_KEY_ID = "test-key";
+  process.env.ALPACA_SECRET_KEY = "test-secret";
+  const original = globalThis.fetch;
+  const agotado = () => {
+    const e = new Error("The operation was aborted");
+    e.name = "TimeoutError";
+    return e;
+  };
+  try {
+    let llamadas = 0;
+    globalThis.fetch = async () => {
+      llamadas++;
+      if (llamadas === 1) throw agotado();
+      return new Response(JSON.stringify({ cash: "1000" }), { status: 200 });
+    };
+    assert.equal((await alpaca("/v2/account")).cash, "1000");
+    assert.equal(llamadas, 2, "una consulta se reintenta una vez");
+    llamadas = 0;
+    globalThis.fetch = async () => {
+      llamadas++;
+      throw agotado();
+    };
+    await assert.rejects(
+      () => alpaca("/v2/orders?status=all&limit=100"),
+      (e: unknown) =>
+        e instanceof AlpacaUnavailable &&
+        /no respondió en 30 s en GET \/v2\/orders$/.test(e.message),
+    );
+    assert.equal(llamadas, 2);
+    assert.match(
+      describeFailure(await alpaca("/v2/positions").catch((e: unknown) => e)),
+      /GET \/v2\/positions/,
+      "el registro dice qué petición falló",
+    );
+    llamadas = 0;
+    await assert.rejects(() =>
+      alpaca("/v2/orders", "POST", { symbol: "AAPL" }),
+    );
+    assert.equal(llamadas, 1, "una orden nunca se reenvía");
+    llamadas = 0;
+    globalThis.fetch = async () => {
+      llamadas++;
+      return new Response("{}", { status: llamadas === 1 ? 503 : 200 });
+    };
+    assert.deepEqual(await alpaca("/v2/clock"), {});
+    assert.equal(llamadas, 2, "un error del servidor de Alpaca se reintenta");
   } finally {
     globalThis.fetch = original;
   }

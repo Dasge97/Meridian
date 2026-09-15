@@ -14,7 +14,7 @@ El worker ejecuta cinco bucles independientes en el mismo proceso. El primero at
 
 Con la sesión abierta, el bucle del bróker encola una revisión periódica del mercado si el agente lleva 30 minutos sin evaluar y no hay nada en cola. No empieza hasta 10 minutos después de la apertura, cuando ya hay velas de la sesión, y deja de hacerlo 15 minutos antes del cierre, porque no daría tiempo a gestionar una operación nueva. Al abrir y al cerrar la bolsa el análisis se recalcula al momento, sin esperar a su ciclo de 5 minutos. Antes el agente solo se despertaba por eventos y podía pasar la sesión entera sin evaluar nada. Separarlos evita que una llamada al modelo de hasta 45 segundos, o una petición lenta a Alpaca, dejen de comprobar las condiciones de precio durante ese tiempo.
 
-Si la sincronización con Alpaca falla, se registra el motivo una sola vez por racha, y otra vez cuando vuelve a funcionar.
+Si la sincronización con Alpaca falla, se registra el motivo una sola vez por racha, y otra vez cuando vuelve a funcionar. Cada petición a Alpaca espera hasta 30 segundos. Las consultas (GET) se reintentan una vez si no responden, si falla la conexión o si Alpaca da un error de servidor; enviar o cancelar una orden nunca se reintenta, porque podría duplicarse. El error dice qué petición falló, y el registro del worker avisa de las que tardan más de 5 segundos. El 14 de septiembre de 2026 la sincronización falló casi sin parar la última hora de sesión con el límite anterior de 15 segundos, y el registro solo decía, por error, que el modelo no había respondido.
 
 ## Horario de la bolsa
 

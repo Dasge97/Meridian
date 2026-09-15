@@ -2,7 +2,8 @@ import { proposalSchema, type State, type Decision } from "./domain.ts";
 import { pendingRefs } from "./news.ts";
 import { marketClock } from "./clock.ts";
 // Con el análisis en el contexto la respuesta razonada es más larga que antes.
-export const MAX_ANSWER_TOKENS = 8000;
+export const MAX_ANSWER_TOKENS = 8000,
+  MODEL_TIMEOUT_MS = 45000;
 export const modelConfigured = () =>
   Boolean(process.env.LLM_API_KEY && process.env.LLM_MODEL);
 async function completion(messages: unknown[]) {
@@ -22,7 +23,12 @@ async function completion(messages: unknown[]) {
       response_format: { type: "json_object" },
       max_completion_tokens: MAX_ANSWER_TOKENS,
     }),
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
+  }).catch((e) => {
+    // Con su propio mensaje, para no confundirlo con un límite de Alpaca.
+    if (e instanceof Error && e.name === "TimeoutError")
+      throw new Error(`el modelo no respondió en ${MODEL_TIMEOUT_MS / 1000} s`);
+    throw e;
   });
   if (!r.ok) throw new Error(`Modelo HTTP ${r.status}`);
   const data: any = await r.json();
