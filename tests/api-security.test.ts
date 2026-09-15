@@ -17,6 +17,17 @@ test("HTTP security: login, signed cookies, route protection, Origin and static 
       401,
       "las velas completas piden sesión igual que el estado",
     );
+    for (const url of [
+      "/api/decisions",
+      "/api/decisions?page=2&kind=buy",
+      "/api/events",
+      "/api/events?q=orden",
+    ])
+      assert.equal(
+        (await app.inject({ method: "GET", url })).statusCode,
+        401,
+        `${url} pide sesión igual que el estado`,
+      );
     assert.equal(
       (
         await app.inject({
@@ -83,6 +94,16 @@ test("HTTP security: login, signed cookies, route protection, Origin and static 
       ).statusCode,
       400,
     );
+    // Los parámetros se validan antes de leer la base de datos.
+    for (const [url, message] of [
+      ["/api/decisions?size=101", /tamaño de página/],
+      ["/api/decisions?kind=todas", /tipo/],
+      ["/api/events?from=ayer", /fecha de inicio/],
+    ] as const) {
+      const r = await app.inject({ method: "GET", url, headers });
+      assert.equal(r.statusCode, 400, url);
+      assert.match(r.json().error, message);
+    }
     const page = await app.inject({ method: "GET", url: "/" });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /Meridian/);

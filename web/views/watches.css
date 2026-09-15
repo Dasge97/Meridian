@@ -298,6 +298,62 @@ td.wt-why {
   text-overflow: ellipsis;
   color: var(--ink-2);
 }
+.wt-history .filterbar {
+  padding: 16px 16px 0;
+  margin-bottom: 14px;
+}
+.wt-history .pagination {
+  margin: 0;
+  padding: 12px 16px;
+}
+
+/* Filtros */
+.wt-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.wt-status button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  padding: 5px 10px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.wt-status button small {
+  font-size: 0.71875rem;
+  color: var(--muted);
+}
+.wt-status button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.wt-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.wt-select label {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.wt-none {
+  display: grid;
+  justify-items: center;
+  padding-bottom: 28px;
+}
+.wt-none .empty {
+  padding-bottom: 0;
+}
 
 /* Formulario */
 .wt-form {

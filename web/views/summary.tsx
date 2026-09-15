@@ -1,19 +1,10 @@
-import React from "react";
+import React, { useState } from "react";
 import {
-  ArrowLeftRight,
-  Brain,
-  ChartCandlestick,
-  CircleDot,
-  ClipboardCheck,
+  ArrowRight,
   Eye,
-  GitBranch,
   Info,
   Loader,
-  Newspaper,
   Pause,
-  Power,
-  RefreshCw,
-  SlidersHorizontal,
   TrendingDown,
   TrendingUp,
   TriangleAlert,
@@ -34,6 +25,8 @@ import {
 } from "../shared";
 import { Chip, Sparkline, Meter, Hint } from "../ui";
 import { EquityChart } from "./summary-chart";
+import { EventItem } from "./summary-activity";
+import { EventLog } from "./events";
 import "./summary.css";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -413,63 +406,40 @@ function Positions({ s }: { s: Data }) {
   );
 }
 
-const kinds: Record<string, { label: string; Icon: LucideIcon }> = {
-  order: { label: "Orden", Icon: ArrowLeftRight },
-  orden: { label: "Orden", Icon: ArrowLeftRight },
-  market: { label: "Mercado", Icon: ChartCandlestick },
-  mercado: { label: "Mercado", Icon: ChartCandlestick },
-  decision: { label: "Decisión", Icon: Brain },
-  review: { label: "Revisión", Icon: ClipboardCheck },
-  watch: { label: "Vigilancia", Icon: Eye },
-  vigilancia: { label: "Vigilancia", Icon: Eye },
-  control: { label: "Control", Icon: Power },
-  config: { label: "Configuración", Icon: SlidersHorizontal },
-  version: { label: "Versión", Icon: GitBranch },
-  sync: { label: "Sincronización", Icon: RefreshCw },
-  news: { label: "Noticias", Icon: Newspaper },
-  noticias: { label: "Noticias", Icon: Newspaper },
-  error: { label: "Error", Icon: TriangleAlert },
-};
-
 function Activity({ s }: { s: Data }) {
-  const events = s.events.slice(0, 8);
+  const [open, setOpen] = useState(false),
+    events = s.events.slice(0, 8),
+    total = s.totals?.events ?? s.events.length;
   return (
     <section className="panel" aria-labelledby="sm-act-title">
       <div className="section-title">
         <h2 id="sm-act-title">Actividad reciente</h2>
-        <span className="muted">
-          {events.length} de {s.totals?.events ?? s.events.length} en el
-          registro
-        </span>
+        <span className="muted">Últimos {events.length}</span>
       </div>
       {!events.length ? (
         <Empty>Todo comienza con una primera observación.</Empty>
       ) : (
         <ol className="sm-timeline">
-          {events.map((e) => {
-            const k = kinds[e.type] ?? { label: e.type, Icon: CircleDot },
-              sameDay =
-                new Date(e.at).toDateString() === new Date().toDateString();
-            return (
-              <li
-                key={e.id}
-                className={e.type === "error" ? "is-error" : undefined}
-              >
-                <span className="sm-dot" aria-hidden="true">
-                  <k.Icon size={14} />
-                </span>
-                <div>
-                  <span className="sm-type">{k.label}</span>
-                  <p>{e.message}</p>
-                </div>
-                <time className="num" dateTime={e.at}>
-                  {sameDay ? clockTime(e.at) : date(e.at)}
-                </time>
-              </li>
-            );
-          })}
+          {events.map((e) => (
+            <EventItem key={e.id} e={e} />
+          ))}
         </ol>
       )}
+      <div className="sm-act-foot">
+        <span className="muted num">
+          {total === 1 ? "1 evento" : `${total} eventos`} en el registro
+        </span>
+        {total > 0 && (
+          <button
+            type="button"
+            className="with-icon"
+            onClick={() => setOpen(true)}
+          >
+            Ver registro completo <ArrowRight size={15} aria-hidden />
+          </button>
+        )}
+      </div>
+      <EventLog open={open} onOpenChange={setOpen} latestId={s.events[0]?.id} />
     </section>
   );
 }

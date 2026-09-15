@@ -371,9 +371,40 @@ small.st-warn {
   padding: 5px 10px;
   font-size: 0.75rem;
 }
-.st-more {
-  margin-top: 14px;
+.st-pinned {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+h3.st-others {
+  margin: 20px 0 12px;
   font-size: 0.8125rem;
+  color: var(--muted);
+}
+.st-versions .filterbar {
+  margin-bottom: 4px;
+}
+.st-versions .searchbox {
+  max-width: none;
+  flex-basis: 100%;
+}
+.st-versions .daterange-inputs {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  width: 100%;
+}
+.st-versions .daterange-inputs input {
+  width: 100%;
+}
+.st-none {
+  display: grid;
+  justify-items: center;
+  padding-bottom: 12px;
+}
+.st-none .empty {
+  padding-bottom: 0;
 }
 .st-danger {
   border-color: var(--down-soft);

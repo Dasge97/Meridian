@@ -1,0 +1,165 @@
+/* Buscar, acotar por fechas y paginar (web/listing.tsx) */
+.filterbar {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.filterbar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+.filterbar-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 0.8125rem;
+}
+.filterbar select,
+.pagination select,
+.searchbox input,
+.daterange input {
+  width: auto;
+  margin: 0;
+  padding: 7px 10px;
+  font-size: 0.875rem;
+}
+.searchbox {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 340px;
+  color: var(--muted);
+}
+.searchbox > svg {
+  position: absolute;
+  left: 10px;
+  pointer-events: none;
+}
+.searchbox input {
+  width: 100%;
+  padding-left: 32px;
+  padding-right: 32px;
+}
+.searchbox button.icon {
+  position: absolute;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+.daterange {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.daterange-presets {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.daterange-presets button {
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  padding: 5px 10px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.daterange-presets button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.daterange-inputs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.daterange-inputs label {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.daterange-error {
+  flex-basis: 100%;
+  color: var(--down);
+}
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding-top: 14px;
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  font-size: 0.8125rem;
+}
+.pagination-range {
+  color: var(--muted);
+}
+.pagination-pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.pagination-pages > span {
+  padding: 0 4px;
+  color: var(--muted);
+}
+.pagination-pages button {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.pagination-pages button.icon {
+  width: 32px;
+}
+.pagination-pages button[aria-current="page"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--surface);
+}
+.pagination-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+@media (max-width: 720px) {
+  .searchbox {
+    max-width: none;
+    flex-basis: 100%;
+  }
+  /* Cada etiqueta en la misma fila que su campo. */
+  .daterange-inputs {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    width: 100%;
+  }
+  .daterange-inputs input {
+    width: 100%;
+    min-width: 0;
+  }
+  .daterange-presets {
+    flex-wrap: wrap;
+  }
+  .pagination {
+    justify-content: center;
+  }
+}

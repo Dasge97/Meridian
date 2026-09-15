@@ -192,6 +192,51 @@ test(
       ).json();
       assert.equal(typeof panel.totals.decisions, "number");
       assert.ok(panel.decisions.every((d: any) => d.input === null));
+      const decisions = (
+        await app.inject({
+          method: "GET",
+          url: "/api/decisions?page=5&size=10&kind=buy",
+          headers,
+        })
+      ).json();
+      assert.deepEqual(Object.keys(decisions).sort(), [
+        "counts",
+        "items",
+        "page",
+        "size",
+        "total",
+      ]);
+      assert.equal(
+        decisions.page,
+        1,
+        "sin decisiones, la última página es la 1",
+      );
+      assert.equal(decisions.size, 10);
+      assert.equal(decisions.counts.all, decisions.total);
+      const events = (
+        await app.inject({
+          method: "GET",
+          url: "/api/events?size=2",
+          headers,
+        })
+      ).json();
+      assert.deepEqual(Object.keys(events).sort(), [
+        "items",
+        "page",
+        "size",
+        "total",
+        "types",
+      ]);
+      assert.equal(events.items.length, 2);
+      assert.ok(events.total > 2, "cada cambio anterior dejó un evento");
+      assert.ok(
+        Date.parse(events.items[0].at) >= Date.parse(events.items[1].at),
+        "lo más reciente primero",
+      );
+      assert.equal(
+        events.types.reduce((a: number, t: any) => a + t.count, 0),
+        events.total,
+      );
       const market = (
         await app.inject({ method: "GET", url: "/api/market", headers })
       ).json();

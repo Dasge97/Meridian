@@ -2,17 +2,23 @@ import React, { useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { Plus } from "lucide-react";
 import type { ViewProps } from "./types";
-import { money, date, Empty } from "../shared";
-import { Badge, Stat } from "../ui";
-import { ActiveWatch, Origin } from "./watches-card";
+import { Empty } from "../shared";
+import { Stat } from "../ui";
+import { FilterBar, SearchInput, fold } from "../listing";
+import { ActiveWatch } from "./watches-card";
 import { NewWatch } from "./watches-form";
-import { sign } from "./watches-parts";
+import { NoMatches, WatchHistory, symbolsOf } from "./watches-history";
 import "./watches.css";
+
+// Con pocas activas los filtros sobran.
+const FILTER_FROM = 5;
 
 export function Watches(p: ViewProps) {
   const { s } = p;
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("active");
+  const [q, setQ] = useState(""),
+    [symbol, setSymbol] = useState("");
   const newest = [...s.watches].sort(
     (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
   );
@@ -24,6 +30,19 @@ export function Watches(p: ViewProps) {
       s.watches.filter((w) => st.includes(w.status)).length,
     byAgent = s.watches.filter((w) => w.decisionId).length,
     cancelled = count("cancelled");
+  const needle = fold(q.trim()),
+    filtering = q !== "" || symbol !== "",
+    shownActive = active.filter(
+      (w) =>
+        (!symbol || w.symbol === symbol) &&
+        (!needle || fold(`${w.symbol} ${w.reason}`).includes(needle)),
+    ),
+    activeSymbols = symbolsOf(active);
+  if (symbol && !activeSymbols.includes(symbol)) activeSymbols.push(symbol);
+  const clearActive = () => {
+    setQ("");
+    setSymbol("");
+  };
   return (
     <>
       <div className="section-title wt-title">
@@ -76,76 +95,65 @@ export function Watches(p: ViewProps) {
           </Tabs.Trigger>
         </Tabs.List>
         <Tabs.Content value="active" className="wt-pane">
-          {active.length ? (
+          {(active.length >= FILTER_FROM || filtering) && (
+            <FilterBar
+              active={filtering}
+              onClear={clearActive}
+              summary={
+                filtering ? (
+                  <>
+                    <span className="num">{shownActive.length}</span> de{" "}
+                    <span className="num">{active.length}</span>
+                  </>
+                ) : undefined
+              }
+            >
+              <SearchInput
+                id="wt-a-q"
+                label="Buscar entre las activas"
+                placeholder="Activo o motivo"
+                value={q}
+                onChange={setQ}
+              />
+              <div className="wt-select">
+                <label htmlFor="wt-a-activo">Activo</label>
+                <select
+                  id="wt-a-activo"
+                  value={symbol}
+                  onChange={(e) => setSymbol(e.target.value)}
+                >
+                  <option value="">Todos</option>
+                  {activeSymbols.map((x) => (
+                    <option key={x}>{x}</option>
+                  ))}
+                </select>
+              </div>
+            </FilterBar>
+          )}
+          {shownActive.length ? (
             <div className="wt-grid">
-              {active.map((w) => (
+              {shownActive.map((w) => (
                 <ActiveWatch key={w.id} w={w} view={p} />
               ))}
             </div>
           ) : (
             <section className="panel">
-              <Empty>
-                No hay condiciones en observación. Añade una o deja que el
-                agente proponga las suyas al analizar el mercado.
-              </Empty>
+              {active.length ? (
+                <NoMatches
+                  what="Ninguna vigilancia activa"
+                  onClear={clearActive}
+                />
+              ) : (
+                <Empty>
+                  No hay condiciones en observación. Añade una o deja que el
+                  agente proponga las suyas al analizar el mercado.
+                </Empty>
+              )}
             </section>
           )}
         </Tabs.Content>
         <Tabs.Content value="history" className="wt-pane">
-          <section className="panel wt-history">
-            {history.length ? (
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th scope="col">Estado</th>
-                      <th scope="col">Condición</th>
-                      <th scope="col">Invalidación</th>
-                      <th scope="col">Creada</th>
-                      <th scope="col">Caducidad</th>
-                      <th scope="col">Origen</th>
-                      <th scope="col">Motivo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {history.map((w) => (
-                      <tr key={w.id}>
-                        <td>
-                          <Badge value={w.status} />
-                        </td>
-                        <td className="num wt-cond">
-                          <b>{w.symbol}</b> {sign(w.operator)} {money(w.price)}
-                        </td>
-                        <td className="num">
-                          {[
-                            w.invalidateBelow !== null &&
-                              "≤ " + money(w.invalidateBelow),
-                            w.invalidateAbove !== null &&
-                              "≥ " + money(w.invalidateAbove),
-                          ]
-                            .filter(Boolean)
-                            .join(" · ") || "—"}
-                        </td>
-                        <td className="num">{date(w.createdAt)}</td>
-                        <td className="num">{date(w.expiresAt)}</td>
-                        <td>
-                          <Origin w={w} view={p} />
-                        </td>
-                        <td className="wt-why" title={w.reason}>
-                          {w.reason}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <Empty>
-                Aquí quedarán las vigilancias activadas, caducadas, invalidadas
-                o canceladas.
-              </Empty>
-            )}
-          </section>
+          <WatchHistory history={history} view={p} />
         </Tabs.Content>
       </Tabs.Root>
       <NewWatch view={p} open={open} onOpenChange={setOpen} />

@@ -28,6 +28,12 @@ import { configured, alpaca, AlpacaError } from "./alpaca.ts";
 import { modelConfigured } from "./model.ts";
 import { recentBars, chartBars } from "./market.ts";
 import { telegramConfigured } from "./telegram.ts";
+import {
+  decisionFilter,
+  eventFilter,
+  listDecisions,
+  listEvents,
+} from "./listing.ts";
 const secret = process.env.SESSION_SECRET ?? "",
   password = process.env.ADMIN_PASSWORD ?? "",
   origin = process.env.APP_ORIGIN ?? "http://localhost:3000";
@@ -171,6 +177,17 @@ app.get("/api/state", async () => {
 // El panel las pide al abrir la pestaña Mercado y cada 5 minutos, que es lo que
 // tarda el worker en volver a descargarlas.
 app.get("/api/market", async () => chartBars(await read()));
+// El historial guarda hasta 2.000 decisiones y el estado solo lleva 300, así
+// que buscar y paginar lo hace el servidor. Los parámetros se validan antes de
+// leer la base de datos.
+app.get("/api/decisions", async (req) => {
+  const f = decisionFilter(req.query);
+  return listDecisions((await read()).decisions, f);
+});
+app.get("/api/events", async (req) => {
+  const f = eventFilter(req.query);
+  return listEvents((await read()).events, f);
+});
 app.get("/api/decisions/:id", async (req, reply) => {
   const p = z.object({ id: z.uuid() }).parse(req.params);
   const d = (await read()).decisions.find((d) => d.id === p.id);

@@ -89,6 +89,17 @@
   font-family: var(--mono);
   color: var(--muted);
 }
+.ln-main > .filterbar {
+  margin-bottom: 12px;
+}
+.ln-none {
+  display: grid;
+  justify-items: center;
+  padding-bottom: 12px;
+}
+.ln-none .empty {
+  padding-bottom: 0;
+}
 .ln-list:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 3px;

@@ -1,10 +1,22 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { Plus, ArrowUpRight } from "lucide-react";
 import type { Lesson } from "../../src/domain";
 import type { ViewProps } from "./types";
 import { date, Empty } from "../shared";
 import { Badge, Meter, Confirm, Sheet, Stat } from "../ui";
+import {
+  ANY_RANGE,
+  DateRange,
+  FilterBar,
+  Pagination,
+  SearchInput,
+  fold,
+  inRange,
+  paginate,
+  rangeActive,
+  type Range,
+} from "../listing";
 import { Counter, versionNumbers } from "./settings-counter";
 import "./learning.css";
 
@@ -248,12 +260,45 @@ export function Learning(p: ViewProps) {
       : lessons.filter((l) => l.status === st).length;
   const active = count("accepted"),
     proposed = count("proposed");
-  const [tab, setTab] = useState(active ? "accepted" : "all");
+  const [tab, setTab] = useState<string>(active ? "accepted" : "all");
   const [adding, setAdding] = useState(false);
+  const [q, setQ] = useState(""),
+    [range, setRange] = useState<Range>(ANY_RANGE),
+    [pages, setPages] = useState<Record<string, number>>({}),
+    [size, setSize] = useState(25);
+  const top = useRef<HTMLElement>(null);
   const v = s.versions.find((x) => x.id === s.activeVersion);
   const numbers = versionNumbers(s.versions);
   const free = MAX_ACTIVE - active;
   const tabs = TABS.filter(([k]) => k !== "proposed" || proposed > 0);
+  const current = tabs.some(([k]) => k === tab) ? tab : "all";
+  // Los recuentos de las pestañas siguen a los filtros; la capacidad, no.
+  const needle = fold(q.trim()),
+    filtering = q !== "" || rangeActive(range),
+    filtered = lessons.filter(
+      (l) =>
+        inRange(l.createdAt, range) &&
+        (!needle || fold(`${l.title} ${l.body} ${l.source}`).includes(needle)),
+    ),
+    inTab = (k: string) =>
+      k === "all" ? filtered : filtered.filter((l) => l.status === k),
+    pg = paginate(inTab(current), pages[current] ?? 1, size);
+  // Tras descartar o activar, la última página que exista.
+  useEffect(() => {
+    if (pg.page !== (pages[current] ?? 1))
+      setPages((x) => ({ ...x, [current]: pg.page }));
+  }, [pg.page, current, pages]);
+  const filter =
+    <T,>(set: (v: T) => void) =>
+    (v: T) => {
+      set(v);
+      setPages({});
+    };
+  const clear = () => {
+    setQ("");
+    setRange(ANY_RANGE);
+    setPages({});
+  };
   return (
     <div className="ln-layout">
       <div className="ln-side" role="region" aria-label="Estado de la memoria">
@@ -332,28 +377,75 @@ export function Learning(p: ViewProps) {
             que tú aportes.
           </Empty>
         ) : (
-          <Tabs.Root value={tab} onValueChange={setTab}>
-            <Tabs.List className="tabs" aria-label="Lecciones por estado">
+          <>
+            <FilterBar
+              active={filtering}
+              onClear={clear}
+              summary={
+                filtering ? (
+                  <>
+                    <span className="num">{filtered.length}</span> de{" "}
+                    <span className="num">{lessons.length}</span>
+                  </>
+                ) : undefined
+              }
+            >
+              <SearchInput
+                id="ln-q"
+                label="Buscar lecciones"
+                placeholder="Título, texto o fuente"
+                value={q}
+                onChange={filter(setQ)}
+              />
+              <DateRange
+                id="ln-fechas"
+                value={range}
+                onChange={filter(setRange)}
+              />
+            </FilterBar>
+            <Tabs.Root value={current} onValueChange={setTab}>
+              <Tabs.List className="tabs" aria-label="Lecciones por estado">
+                {tabs.map(([k, label]) => (
+                  <Tabs.Trigger key={k} value={k}>
+                    {label} <small className="num">{inTab(k).length}</small>
+                  </Tabs.Trigger>
+                ))}
+              </Tabs.List>
               {tabs.map(([k, label]) => (
-                <Tabs.Trigger key={k} value={k}>
-                  {label} <small className="num">{count(k)}</small>
-                </Tabs.Trigger>
-              ))}
-            </Tabs.List>
-            {tabs.map(([k, label]) => {
-              const shown =
-                k === "all" ? lessons : lessons.filter((l) => l.status === k);
-              return (
                 <Tabs.Content key={k} value={k} className="ln-list">
-                  {shown.length ? (
-                    shown.map((l) => <LessonCard key={l.id} l={l} p={p} />)
+                  {k !== current ? null : pg.items.length ? (
+                    <>
+                      {pg.items.map((l) => (
+                        <LessonCard key={l.id} l={l} p={p} />
+                      ))}
+                      <Pagination
+                        label={`Páginas de lecciones ${label.toLowerCase()}`}
+                        page={pg.page}
+                        size={size}
+                        total={pg.total}
+                        onPage={(n) => {
+                          setPages((x) => ({ ...x, [k]: n }));
+                          const el = top.current;
+                          if (el && el.getBoundingClientRect().top < 0)
+                            el.scrollIntoView({ block: "start" });
+                        }}
+                        onSize={filter(setSize)}
+                      />
+                    </>
+                  ) : filtering ? (
+                    <div className="ln-none">
+                      <Empty>Ninguna lección con estos filtros.</Empty>
+                      <button type="button" onClick={clear}>
+                        Quitar filtros
+                      </button>
+                    </div>
                   ) : (
                     <Empty>No hay lecciones {label.toLowerCase()}.</Empty>
                   )}
                 </Tabs.Content>
-              );
-            })}
-          </Tabs.Root>
+              ))}
+            </Tabs.Root>
+          </>
         )}
       </section>
       <AddLesson {...p} open={adding} setOpen={setAdding} />

@@ -1,0 +1,53 @@
+/* Registro completo de actividad. Solo variables de web/style.css. */
+.ev {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.ev .filterbar-controls > .daterange,
+.ev .ev-types {
+  flex-basis: 100%;
+}
+.ev-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 24px 0;
+  font-size: 0.875rem;
+}
+/* La página anterior se queda mientras llega la nueva. */
+.ev-list {
+  transition: opacity 0.15s ease 0.15s;
+}
+.ev-list.is-loading {
+  opacity: 0.55;
+}
+.ev-day + .ev-day {
+  margin-top: 22px;
+}
+.ev-day-title {
+  position: sticky;
+  top: -22px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 8px 0;
+  background: var(--surface);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.ev-day-title span::first-letter {
+  text-transform: uppercase;
+}
+.ev-day-title::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.ev .pagination {
+  margin-top: 22px;
+}

@@ -1,9 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { RotateCcw } from "lucide-react";
 import type { ViewProps } from "./types";
-import { date } from "../shared";
-import { Confirm } from "../ui";
-import { Counter, versionNumbers } from "./settings-counter";
+import { Counter } from "./settings-counter";
 
 export function Instructions(p: ViewProps) {
   const { s, busy, act } = p;
@@ -116,85 +113,5 @@ export function Instructions(p: ViewProps) {
         </button>
       </div>
     </form>
-  );
-}
-
-export function Versions(p: ViewProps) {
-  const { s, busy, act } = p;
-  const [all, setAll] = useState(false);
-  const numbers = versionNumbers(s.versions);
-  const list = [...s.versions].reverse();
-  const shown = all ? list : list.slice(0, 6);
-  return (
-    <section className="panel st-versions">
-      <div className="group-title">
-        <h2>Versiones</h2>
-        <span>{s.versions.length} guardadas</span>
-      </div>
-      <ol className="st-timeline">
-        {shown.map((x) => {
-          const n = numbers.get(x.id)!,
-            active = x.id === s.activeVersion,
-            prev = s.versions[n - 2];
-          return (
-            <li key={x.id} className={active ? "on" : undefined}>
-              <span className="st-dot" aria-hidden="true" />
-              <div className="st-ver-head">
-                <strong>Versión {n}</strong>
-                {active && <span className="st-active">Activa</span>}
-                <time dateTime={x.createdAt}>{date(x.createdAt)}</time>
-              </div>
-              <p>{x.note}</p>
-              <div className="st-ver-foot">
-                <small>
-                  <span className="num">{x.lessonIds.length}</span>{" "}
-                  {x.lessonIds.length === 1 ? "lección" : "lecciones"}
-                  {prev && prev.instructions !== x.instructions
-                    ? " · instrucciones nuevas"
-                    : ""}
-                </small>
-                {!active && (
-                  <Confirm
-                    title={`¿Recuperar la versión ${n}?`}
-                    description={
-                      <>
-                        <p>
-                          Vuelven sus instrucciones y sus {x.lessonIds.length}{" "}
-                          lecciones activas.
-                        </p>
-                        <p>
-                          Las lecciones activas que no estaban en ella pasan a
-                          propuestas. No se borra ninguna versión.
-                        </p>
-                      </>
-                    }
-                    action="Recuperar versión"
-                    onConfirm={() => act(`/versions/${x.id}/activate`)}
-                  >
-                    <button
-                      type="button"
-                      className="st-restore"
-                      disabled={busy}
-                    >
-                      <RotateCcw size={14} aria-hidden /> Recuperar
-                    </button>
-                  </Confirm>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-      {list.length > 6 && (
-        <button
-          type="button"
-          className="link st-more"
-          onClick={() => setAll(!all)}
-          aria-expanded={all}
-        >
-          {all ? "Ver solo las recientes" : `Ver las ${list.length}`}
-        </button>
-      )}
-    </section>
   );
 }

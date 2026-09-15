@@ -506,6 +506,17 @@ dl.sm-facts {
 .sm-timeline li.is-error .sm-type {
   color: var(--down);
 }
+.sm-act-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 0.8125rem;
+}
 
 /* Consumo */
 .sm-usage-bars {

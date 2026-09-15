@@ -48,34 +48,32 @@ button.dc-attn-link {
 .filters button.dc-hot:not([aria-pressed="true"]) small {
   color: inherit;
 }
-.dc-search {
-  position: relative;
+.dc-symbol {
+  display: inline-flex;
+  min-width: 0;
+}
+.dc-kinds {
+  padding-bottom: 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.dc-panel > .banner {
+  margin: 12px 0;
+}
+.dc-loading-first {
   display: flex;
   align-items: center;
-  flex: 0 1 280px;
-  min-width: 0;
-  color: var(--muted);
-}
-.dc-search > svg {
-  position: absolute;
-  left: 10px;
-  pointer-events: none;
-}
-.dc-search input {
+  gap: 8px;
+  padding: 24px 0;
   margin: 0;
-  padding: 7px 34px 7px 34px;
-  font-size: 0.875rem;
-  border-radius: 999px;
 }
-.dc-search button.icon {
-  position: absolute;
-  right: 4px;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: 50%;
-  background: none;
-  color: var(--muted);
+/* Mientras llega la página nueva se ve la anterior. Se atenúa solo si tarda. */
+.dc-timeline {
+  transition: opacity 0.15s;
+}
+.dc-timeline.dc-stale {
+  opacity: 0.55;
+  transition-delay: 0.25s;
 }
 
 .dc-none {
@@ -483,8 +481,10 @@ dl.dc-ids dd {
   .dc-figures .stat strong {
     font-size: 1.3rem;
   }
-  .dc-search {
-    flex-basis: 100%;
+  .dc-symbol,
+  .dc-symbol select {
+    flex: 1 1 100%;
+    width: 100%;
   }
   button.dc-row {
     grid-template-columns: 32px minmax(0, 1fr) auto;

@@ -9,7 +9,8 @@ import type { ViewProps } from "./types";
 import { date } from "../shared";
 import { Confirm } from "../ui";
 import { Limits } from "./settings-limits";
-import { Instructions, Versions } from "./settings-instructions";
+import { Instructions } from "./settings-instructions";
+import { Versions } from "./settings-versions";
 import "./settings.css";
 
 type Level = "ok" | "partial" | "off";
