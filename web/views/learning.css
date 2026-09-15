@@ -1,0 +1,248 @@
+/* Vista Aprendizaje */
+.ln-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(280px, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.ln-side {
+  order: 2;
+  position: sticky;
+  top: 22px;
+}
+.ln-capacity {
+  display: grid;
+  gap: 12px;
+}
+.ln-capacity .group-title {
+  margin-bottom: 4px;
+}
+.ln-count {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.ln-count strong {
+  font-size: 2.4rem;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+.ln-count .num {
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+.ln-count span:last-child {
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+.ln-capacity .meter {
+  height: 8px;
+  border-radius: 4px;
+}
+.ln-capacity-text {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.stats.ln-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.ln-version-note {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--lime-soft);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.ln-version-note .muted {
+  font-size: 0.71875rem;
+}
+.ln-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+.ln-how h2 {
+  margin-bottom: 10px;
+}
+.ln-how ol {
+  margin: 0;
+  padding-left: 1.3em;
+  display: grid;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.ln-how ol::marker,
+.ln-how li::marker {
+  font-family: var(--mono);
+  color: var(--muted);
+}
+.ln-list:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+.ln-card {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.ln-card:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.ln-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ln-card h3 {
+  font-size: 1.0625rem;
+  line-height: 1.4;
+  margin: 10px 0 8px;
+  text-wrap: pretty;
+}
+.ln-body {
+  font-size: 0.9375rem;
+  color: var(--ink-2);
+  max-width: 72ch;
+  margin-bottom: 14px;
+}
+dl.ln-meta {
+  margin: 0;
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.8125rem;
+}
+dl.ln-meta > div {
+  display: grid;
+  grid-template-columns: 11em minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+dl.ln-meta > div:last-child {
+  border-bottom: 0;
+}
+.ln-meta dd {
+  text-align: left;
+  color: var(--ink);
+  min-width: 0;
+}
+.ln-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+  text-align: left;
+}
+.ln-versions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ln-version {
+  font-size: 0.71875rem;
+  padding: 0 6px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  color: var(--ink-2);
+  background: var(--surface);
+}
+.ln-version.on {
+  border-color: var(--lime-ink);
+  background: var(--lime-soft);
+  color: var(--lime-ink);
+  font-weight: 600;
+}
+.ln-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.ln-actions small {
+  margin-right: auto;
+  color: var(--warn);
+}
+.ln-actions button {
+  padding: 8px 13px;
+}
+.ln-form {
+  display: grid;
+  gap: 4px;
+}
+.ln-field input,
+.ln-field textarea {
+  margin-bottom: 6px;
+}
+.ln-field {
+  margin-bottom: 12px;
+}
+.ln-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.ln-help {
+  display: block;
+}
+.counter {
+  font-size: 0.71875rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.counter.off {
+  color: var(--warn);
+}
+.ln-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+@media (max-width: 1200px) {
+  .ln-layout {
+    grid-template-columns: 1fr;
+  }
+  .ln-side {
+    order: 0;
+    position: static;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 0 22px;
+  }
+}
+@media (max-width: 720px) {
+  dl.ln-meta > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .ln-meta dt {
+    font-size: 0.71875rem;
+  }
+  .ln-actions {
+    justify-content: stretch;
+  }
+  .ln-actions button {
+    flex: 1;
+  }
+}

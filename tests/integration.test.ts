@@ -192,6 +192,10 @@ test(
       ).json();
       assert.equal(typeof panel.totals.decisions, "number");
       assert.ok(panel.decisions.every((d: any) => d.input === null));
+      const market = (
+        await app.inject({ method: "GET", url: "/api/market", headers })
+      ).json();
+      assert.deepEqual(Object.keys(market).sort(), ["daily", "intraday"]);
       const rows = (
         await pool.query(
           "SELECT id, xmin::text, data FROM meridian_state ORDER BY id",

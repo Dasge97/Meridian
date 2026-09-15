@@ -1,0 +1,441 @@
+/* Vista Configuración */
+.st-connections ul {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.st-connections .group-title {
+  flex-wrap: wrap;
+}
+.st-conn {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--surface-2);
+  min-width: 0;
+}
+.st-conn.ok {
+  border-left-color: var(--up);
+}
+.st-conn.partial {
+  border-left-color: var(--warn);
+}
+.st-conn-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.st-conn h3 {
+  font-size: 0.9375rem;
+  margin: 0;
+}
+.st-level {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 8px 3px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px dashed var(--line-2);
+}
+.st-conn.ok .st-level {
+  color: var(--up);
+  background: var(--up-soft);
+  border: 1px solid transparent;
+}
+.st-conn.partial .st-level {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid transparent;
+}
+.st-conn p {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.st-conn small {
+  font-size: 0.71875rem;
+}
+.st-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.st-limits .section-title {
+  margin-bottom: 4px;
+}
+.st-limits .section-title .muted {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8125rem;
+}
+.st-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px 22px;
+}
+.st-field {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+.st-field label {
+  font-weight: 500;
+  color: var(--ink);
+}
+.st-field small {
+  font-size: 0.71875rem;
+  line-height: 1.45;
+}
+.st-input {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.st-input:focus-within {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+.st-input input {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  min-width: 0;
+  padding: 9px 10px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.st-input input:focus-visible {
+  outline: none;
+}
+.st-input input:invalid {
+  color: var(--down);
+}
+.st-input span {
+  display: grid;
+  place-items: center;
+  padding: 0 10px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-left: 1px solid var(--line);
+  white-space: nowrap;
+}
+.st-usage {
+  display: grid;
+  gap: 5px;
+  margin-top: 2px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+.st-usage > span {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+.st-tags {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.st-tags li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 2px 2px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.st-tags button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+}
+.st-tags button:hover {
+  background: var(--down-soft);
+  color: var(--down);
+}
+.st-tag-add {
+  display: flex;
+  gap: 8px;
+  max-width: 320px;
+}
+.st-tag-add input {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+}
+.st-tag-add button {
+  padding: 8px 14px;
+}
+.st-tag-add input[aria-invalid="true"] {
+  border-color: var(--down);
+}
+.st-problem {
+  color: var(--down);
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.st-warn {
+  display: block;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 0.8125rem;
+  margin: 0 0 12px;
+}
+small.st-warn {
+  margin: 0;
+}
+.st-savebar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+.st-savebar > span {
+  margin-right: auto;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.st-limits .st-savebar {
+  position: sticky;
+  bottom: 0;
+  margin: 18px -25px -25px;
+  padding: 14px 25px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 12px 12px;
+}
+.st-savebar.dirty > span,
+.st-dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--warn);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+.st-savebar.dirty > span i,
+.st-dirty i {
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  background: var(--warn);
+}
+.st-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.st-label label {
+  font-weight: 500;
+  color: var(--ink);
+}
+.st-editor {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  min-height: 260px;
+  background: var(--surface-2);
+}
+.st-instructions input {
+  margin-bottom: 0;
+}
+.counter {
+  font-size: 0.71875rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.counter.off {
+  color: var(--warn);
+}
+.st-timeline {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+.st-timeline li {
+  position: relative;
+  padding: 0 0 18px 26px;
+}
+.st-timeline li::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 16px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--line-2);
+}
+.st-timeline li:last-child::before {
+  display: none;
+}
+.st-timeline li:last-child {
+  padding-bottom: 0;
+}
+.st-dot {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--line-2);
+  background: var(--surface);
+}
+.st-timeline li.on .st-dot {
+  border-color: var(--ink);
+  background: var(--lime);
+}
+.st-ver-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.st-ver-head strong {
+  font-size: 0.875rem;
+}
+.st-ver-head time {
+  margin-left: auto;
+  font-size: 0.71875rem;
+}
+.st-active {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--lime);
+  color: #101c26;
+}
+.st-timeline p {
+  margin: 4px 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.st-ver-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.st-ver-foot small {
+  font-size: 0.71875rem;
+}
+.st-restore {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+}
+.st-more {
+  margin-top: 14px;
+  font-size: 0.8125rem;
+}
+.st-danger {
+  border-color: var(--down-soft);
+  box-shadow: inset 3px 0 0 var(--down);
+}
+.st-danger-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--down);
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--down-soft);
+}
+.st-danger-head h2 {
+  margin: 0;
+  font-size: 0.8125rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.st-danger h3 {
+  font-size: 0.9375rem;
+  margin: 0 0 6px;
+}
+.st-danger p {
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  margin-bottom: 8px;
+  color: var(--ink-2);
+}
+.st-danger button {
+  margin-top: 6px;
+}
+.st-danger small {
+  display: block;
+  margin-top: 8px;
+}
+@media (max-width: 1200px) {
+  .st-layout {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 900px) {
+  .st-connections ul {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 720px) {
+  .st-limits .st-savebar {
+    margin: 18px -16px -20px;
+    padding: 12px 16px;
+  }
+  .st-savebar button {
+    flex: 1;
+  }
+  .st-savebar > span {
+    flex-basis: 100%;
+  }
+  .st-danger button {
+    width: 100%;
+  }
+  .st-tag-add {
+    max-width: none;
+  }
+}

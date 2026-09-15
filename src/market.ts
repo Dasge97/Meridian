@@ -53,8 +53,11 @@ export type Analysis = {
   barsDiscarded: number;
   source: string;
 };
+// Se guarda un año de velas diarias para las gráficas del panel. El modelo y el
+// estado que el panel pide cada 5 segundos solo llevan las 20 más recientes.
 export const BARS_KEPT = 20,
-  DAYS_52W = 252;
+  DAYS_52W = 252,
+  DAILY_BARS_STORED = DAYS_52W;
 const num = (v: unknown) =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
 // Alpaca devuelve de vez en cuando una vela con un extremo mal escalado: el
@@ -203,7 +206,7 @@ export function analyse(
     ind.volumeRatio20 = indicators(completed, price)?.volumeRatio20 ?? null;
   return {
     at,
-    bars: bars.slice(-BARS_KEPT),
+    bars: bars.slice(-DAILY_BARS_STORED),
     today: partial ? withDate(bars) : null,
     lastSession: withDate(completed),
     indicators: ind,
@@ -232,7 +235,10 @@ export type Intraday = {
   // Velas recientes que vienen de IEX porque las del mercado completo aún no han llegado.
   iexBars?: number;
 };
-export const INTRADAY_KEPT = 12;
+// La sesión entera son 78 velas de 5 minutos. Se guardan todas para la gráfica
+// del panel; el modelo recibe como mucho las 12 últimas.
+export const INTRADAY_KEPT = 12,
+  INTRADAY_BARS_STORED = 78;
 // Alpaca también da velas de antes de la apertura y después del cierre. Tienen
 // poco volumen y precios poco representativos, así que se dejan fuera.
 // Las velas del mercado completo (sip) llegan con 15 minutos de retraso en esta
@@ -283,7 +289,7 @@ export function intradaySummary(
     at,
     date,
     source,
-    bars: bars.slice(-INTRADAY_KEPT),
+    bars: bars.slice(-INTRADAY_BARS_STORED),
     open: bars[0].o,
     high,
     low,
@@ -297,4 +303,36 @@ export function intradaySummary(
     barsUsed: bars.length,
     iexBars: bars.filter((b) => recientes.includes(b)).length,
   };
+}
+type MarketData = {
+  analysis: Record<string, Analysis>;
+  intraday: Record<string, Intraday>;
+};
+const recent = <T extends { bars: Bar[] }>(
+  bySymbol: Record<string, T>,
+  n: number,
+) =>
+  Object.fromEntries(
+    Object.entries(bySymbol ?? {}).map(([symbol, x]) => [
+      symbol,
+      { ...x, bars: x.bars.slice(-n) },
+    ]),
+  ) as Record<string, T>;
+// Lo que va en el estado que el panel pide cada 5 segundos: las mismas velas
+// recientes de siempre. Con el año entero la respuesta pesaría decenas de
+// kilobytes más por activo en cada consulta.
+export function recentBars(s: MarketData) {
+  return {
+    analysis: recent(s.analysis, BARS_KEPT),
+    intraday: recent(s.intraday, INTRADAY_KEPT),
+  };
+}
+// Las velas completas por activo, para las gráficas. El panel las pide aparte y
+// solo cada pocos minutos.
+export function chartBars(s: MarketData) {
+  const bars = <T extends { bars: Bar[] }>(bySymbol: Record<string, T>) =>
+    Object.fromEntries(
+      Object.entries(bySymbol ?? {}).map(([symbol, x]) => [symbol, x.bars]),
+    ) as Record<string, Bar[]>;
+  return { daily: bars(s.analysis), intraday: bars(s.intraday) };
 }

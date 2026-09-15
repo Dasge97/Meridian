@@ -26,6 +26,7 @@ import {
 } from "./domain.ts";
 import { configured, alpaca, AlpacaError } from "./alpaca.ts";
 import { modelConfigured } from "./model.ts";
+import { recentBars, chartBars } from "./market.ts";
 import { telegramConfigured } from "./telegram.ts";
 const secret = process.env.SESSION_SECRET ?? "",
   password = process.env.ADMIN_PASSWORD ?? "",
@@ -144,6 +145,8 @@ app.get("/api/state", async () => {
   const s = await read();
   return {
     ...s,
+    // Las velas completas van por /api/market: aquí solo las recientes.
+    ...recentBars(s),
     // The saved model context is fetched per decision from /api/decisions/:id.
     decisions: s.decisions
       .slice(-PANEL_DECISIONS)
@@ -164,6 +167,10 @@ app.get("/api/state", async () => {
     },
   };
 });
+// Un año de velas diarias y la sesión entera en velas de 5 minutos, por activo.
+// El panel las pide al abrir la pestaña Mercado y cada 5 minutos, que es lo que
+// tarda el worker en volver a descargarlas.
+app.get("/api/market", async () => chartBars(await read()));
 app.get("/api/decisions/:id", async (req, reply) => {
   const p = z.object({ id: z.uuid() }).parse(req.params);
   const d = (await read()).decisions.find((d) => d.id === p.id);

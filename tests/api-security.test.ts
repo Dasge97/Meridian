@@ -13,6 +13,11 @@ test("HTTP security: login, signed cookies, route protection, Origin and static 
       401,
     );
     assert.equal(
+      (await app.inject({ method: "GET", url: "/api/market" })).statusCode,
+      401,
+      "las velas completas piden sesión igual que el estado",
+    );
+    assert.equal(
       (
         await app.inject({
           method: "POST",

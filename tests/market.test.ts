@@ -8,6 +8,8 @@ import {
   todayFrom,
   analyse,
   intradaySummary,
+  recentBars,
+  chartBars,
   type Bar,
 } from "../src/market.ts";
 import { newYorkDate } from "../src/clock.ts";
@@ -130,10 +132,26 @@ test("Today summarises the last session against the previous close", () => {
   assert.equal(t.changePct, 0.97);
   assert.equal(todayFrom([]), null);
 });
-test("The analysis keeps only recent bars and says what it discarded", () => {
+test("The analysis keeps a year of bars and says what it discarded", () => {
+  const raw: unknown[] = [...serie(300), { roto: true }];
+  const a = analyse(raw, 399, "prueba", "2026-09-11T17:00:00Z");
+  assert.equal(a.bars.length, 252, "un año de sesiones para las gráficas");
+  assert.equal(a.bars.at(-1)!.c, 399);
+  assert.equal(a.barsUsed, 300);
+  assert.equal(a.barsDiscarded, 1);
+  // El estado del panel y el modelo siguen viendo solo las recientes.
+  const panel = recentBars({ analysis: { X: a }, intraday: {} });
+  assert.equal(panel.analysis.X.bars.length, 20);
+  assert.equal(panel.analysis.X.bars.at(-1)!.c, 399);
+  assert.equal(a.bars.length, 252, "recortar no toca lo guardado");
+  assert.equal(
+    chartBars({ analysis: { X: a }, intraday: {} }).daily.X.length,
+    252,
+  );
+});
+test("The analysis says what it discarded", () => {
   const raw: unknown[] = [...serie(60), { roto: true }];
   const a = analyse(raw, 160, "prueba", "2026-09-11T17:00:00Z");
-  assert.equal(a.bars.length, 20, "solo se guardan las veinte ultimas");
   assert.equal(a.barsUsed, 60);
   assert.equal(a.barsDiscarded, 1);
   assert.equal(a.indicators!.sma20, 149.5);
@@ -215,7 +233,14 @@ test("The intraday summary keeps only the regular session of the last day", () =
   assert.equal(d.change30mPct, 5.66, "de 106 a 112");
   assert.equal(d.change60mPct, 12, "de 100 a 112");
   assert.equal(d.vwap, 106, "volumen igual en todas: la media de cierres");
-  assert.equal(d.bars.length, 12);
+  assert.equal(d.bars.length, 13, "la sesión entera, para la gráfica");
+  const panel = recentBars({ analysis: {}, intraday: { X: d } });
+  assert.equal(panel.intraday.X.bars.length, 12);
+  assert.equal(panel.intraday.X.bars.at(-1)!.c, 112);
+  assert.equal(
+    chartBars({ analysis: {}, intraday: { X: d } }).intraday.X.length,
+    13,
+  );
   assert.equal(intradaySummary([cinco("08:00", 50)], 0, "prueba"), null);
   // Un día después, el precio del momento no se compara con la sesión del lunes.
   const vieja = intradaySummary(raw, 150, "prueba", "2026-09-15T15:00:00Z")!;

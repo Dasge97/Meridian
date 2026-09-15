@@ -1,74 +1,87 @@
 import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import type { State, Decision } from "../src/domain";
+import * as Tooltip from "@radix-ui/react-tooltip";
+import { Toaster, toast } from "sonner";
+import { Command } from "cmdk";
+import {
+  LayoutDashboard,
+  ChartCandlestick,
+  ListChecks,
+  Crosshair,
+  BookOpen,
+  Settings,
+  RefreshCw,
+  Play,
+  Pause,
+  LogOut,
+  Search,
+  TriangleAlert,
+  PlugZap,
+  LoaderCircle,
+  ArrowRight,
+  X,
+} from "lucide-react";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
+import type { Decision } from "../src/domain";
+import { money, date, marketOpen, marketText } from "./shared";
+import { Badge, Chip, Hint } from "./ui";
+import { Market } from "./market";
+import type { Data } from "./views/types";
+import { Summary } from "./views/summary";
+import { Decisions } from "./views/decisions";
+import { Watches } from "./views/watches";
+import { Learning } from "./views/learning";
+import { SettingsView } from "./views/settings";
+import { DecisionDetail } from "./views/decision-detail";
 import "./style.css";
-type Data = State & {
-  totals: { decisions: number; events: number; equity: number };
-  connection: {
-    alpaca: boolean;
-    model: boolean;
-    modelName: string | null;
-    telegram: boolean;
-  };
-};
-const money = (n: number | string | null | undefined) =>
-  n == null
-    ? "—"
-    : new Intl.NumberFormat("es-ES", {
-        style: "currency",
-        currency: "USD",
-        maximumFractionDigits: 2,
-      }).format(Number(n));
-const date = (s: string | null | undefined) =>
-  s
-    ? new Date(s).toLocaleString("es-ES", {
-        dateStyle: "short",
-        timeStyle: "short",
-      })
-    : "—";
-// Día y hora en la zona del navegador, que es la del propietario.
-const weekdayTime = (s: string) =>
-  new Date(s).toLocaleString("es-ES", {
-    weekday: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-// Mismo criterio que el worker: abierta solo si el calendario responde, dice que
-// está abierta y aún no ha llegado su cierre.
-const marketText = (s: State) => {
-  const m = s.market;
-  if (!m || !s.feeds?.clock) return "Calendario no disponible";
-  if (m.open && m.nextClose && Date.parse(m.nextClose) > Date.now())
-    return "Abierta hasta el " + weekdayTime(m.nextClose);
-  return m.nextOpen
-    ? "Cerrada · abre el " + weekdayTime(m.nextOpen)
-    : "Cerrada";
-};
-const labels: Record<string, string> = {
-  active: "Vigilando",
-  triggered: "Activada",
-  expired: "Caducada",
-  cancelled: "Cancelada",
-  invalidated: "Invalidada",
-  proposed: "Propuesta",
-  accepted: "Aceptada",
-  rejected: "Descartada",
-  retired: "Retirada",
-  observed: "Observación",
-  blocked: "Bloqueada",
-  pending: "En cola",
-  submitting: "Enviando",
-  not_submitted: "No enviada",
-  unknown: "Por reconciliar",
-  filled: "Ejecutada",
-  new: "Abierta",
-  partially_filled: "Parcial",
-  buy: "Comprar",
-  sell: "Vender",
-  wait: "Esperar",
-  canceled: "Cancelada",
-};
+const TABS = [
+  {
+    name: "Resumen",
+    icon: LayoutDashboard,
+    title: "El pulso de tu agente",
+    text: "Qué hace el agente, cómo va la cuenta y qué ha pasado.",
+  },
+  {
+    name: "Mercado",
+    icon: ChartCandlestick,
+    title: "Mercado",
+    text: "Los mismos datos que recibe el agente para decidir.",
+  },
+  {
+    name: "Decisiones",
+    icon: ListChecks,
+    title: "Decisiones",
+    text: "Cada hipótesis, su contexto y lo que ocurrió después.",
+  },
+  {
+    name: "Vigilancias",
+    icon: Crosshair,
+    title: "Vigilancias",
+    text: "Condiciones de precio que despiertan al agente.",
+  },
+  {
+    name: "Aprendizaje",
+    icon: BookOpen,
+    title: "Aprendizaje",
+    text: "Lecciones que salen de revisar sus operaciones.",
+  },
+  {
+    name: "Configuración",
+    icon: Settings,
+    title: "Configuración",
+    text: "Tú defines los límites. El agente decide dentro de ellos.",
+  },
+];
+// Aviso tras una acción que sale bien. El resto dice solo que se guardó.
+const done = (url: string, body: unknown) =>
+  url === "/wake"
+    ? "Evaluación pedida al agente"
+    : url === "/pause"
+      ? (body as { paused: boolean }).paused
+        ? "Agente pausado"
+        : "Agente activado"
+      : "Cambios guardados";
 async function api(url: string, body?: unknown, method = "POST") {
   const r = await fetch("/api" + url, {
     method,
@@ -79,62 +92,93 @@ async function api(url: string, body?: unknown, method = "POST") {
   if (!r.ok) throw new Error(d.error || "No se pudo completar");
   return d;
 }
-function Badge({ value }: { value: string }) {
-  return <span className={"badge " + value}>{labels[value] ?? value}</span>;
-}
-function Empty({ children }: { children: React.ReactNode }) {
+function Palette(p: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  s: Data;
+  busy: boolean;
+  ready: boolean;
+  goTo: (tab: string) => void;
+  openDecision: (d: Decision) => void;
+  act: (url: string, body?: unknown) => Promise<boolean>;
+}) {
+  const run = (fn: () => void) => {
+    p.onOpenChange(false);
+    fn();
+  };
   return (
-    <div className="empty">
-      <span>◇</span>
-      <p>{children}</p>
-    </div>
-  );
-}
-function Chart({ values }: { values: { at: string; value: number }[] }) {
-  if (values.length < 2)
-    return (
-      <Empty>
-        La curva aparecerá cuando haya dos muestras de tu cuenta simulada.
-      </Empty>
-    );
-  const lo = Math.min(...values.map((v) => v.value)),
-    hi = Math.max(...values.map((v) => v.value)),
-    range = hi - lo || 1;
-  const points = values
-    .map(
-      (v, i) =>
-        `${(i / (values.length - 1)) * 900},${160 - ((v.value - lo) / range) * 140}`,
-    )
-    .join(" ");
-  return (
-    <>
-      <svg
-        className="chart"
-        viewBox="0 0 900 190"
-        role="img"
-        aria-label={`Patrimonio: ${money(values[0].value)} a ${money(values.at(-1)!.value)}`}
-      >
-        <line x1="0" x2="900" y1="160" y2="160" stroke="#e4e8ec" />
-        <line
-          x1="0"
-          x2="900"
-          y1="90"
-          y2="90"
-          stroke="#e4e8ec"
-          strokeDasharray="5 5"
-        />
-        <polyline
-          points={points}
-          fill="none"
-          stroke="#4d7e22"
-          strokeWidth="3"
-        />
-      </svg>
-      <div className="between muted">
-        <span>{date(values[0].at)}</span>
-        <span>{date(values.at(-1)!.at)}</span>
+    <Command.Dialog
+      open={p.open}
+      onOpenChange={p.onOpenChange}
+      label="Buscar o ir a"
+      className="palette"
+      overlayClassName="overlay"
+      contentClassName="palette-dialog"
+    >
+      <div className="palette-input">
+        <Search size={16} aria-hidden />
+        <Command.Input placeholder="Busca una vista, una acción o una decisión" />
+        <kbd>Esc</kbd>
       </div>
-    </>
+      <Command.List>
+        <Command.Empty>Sin resultados.</Command.Empty>
+        <Command.Group heading="Ir a">
+          {TABS.map((t) => (
+            <Command.Item
+              key={t.name}
+              value={"ir a " + t.name}
+              onSelect={() => run(() => p.goTo(t.name))}
+            >
+              <t.icon size={16} aria-hidden />
+              {t.name}
+            </Command.Item>
+          ))}
+        </Command.Group>
+        <Command.Group heading="Acciones">
+          <Command.Item
+            value="reevaluar ahora"
+            disabled={p.busy}
+            onSelect={() => run(() => p.act("/wake"))}
+          >
+            <RefreshCw size={16} aria-hidden />
+            Reevaluar ahora
+          </Command.Item>
+          <Command.Item
+            value={p.s.paused ? "activar agente" : "pausar agente"}
+            disabled={p.busy || (p.s.paused && !p.ready)}
+            onSelect={() => run(() => p.act("/pause", { paused: !p.s.paused }))}
+          >
+            {p.s.paused ? (
+              <Play size={16} aria-hidden />
+            ) : (
+              <Pause size={16} aria-hidden />
+            )}
+            {p.s.paused ? "Activar agente" : "Pausar agente"}
+          </Command.Item>
+        </Command.Group>
+        {p.s.decisions.length > 0 && (
+          <Command.Group heading="Decisiones recientes">
+            {[...p.s.decisions]
+              .reverse()
+              .slice(0, 8)
+              .map((d) => (
+                <Command.Item
+                  key={d.id}
+                  value={`${d.id} ${d.proposal.action} ${d.proposal.symbol ?? "mercado"} ${d.proposal.note ?? ""} ${d.proposal.reason}`}
+                  onSelect={() => run(() => p.openDecision(d))}
+                >
+                  <Badge value={d.proposal.action} />
+                  <b className="num">{d.proposal.symbol ?? "Mercado"}</b>
+                  <span className="palette-text">
+                    {d.proposal.note || d.proposal.reason}
+                  </span>
+                  <time>{date(d.at)}</time>
+                </Command.Item>
+              ))}
+          </Command.Group>
+        )}
+      </Command.List>
+    </Command.Dialog>
   );
 }
 function App() {
@@ -142,11 +186,9 @@ function App() {
     [auth, setAuth] = useState<boolean | null>(null),
     [tab, setTab] = useState("Resumen"),
     [error, setError] = useState(""),
-    [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
+    [palette, setPalette] = useState(false),
     [selected, setSelected] = useState<Decision | null>(null),
-    [showWatch, setShowWatch] = useState(false),
-    [showLesson, setShowLesson] = useState(false),
     [detail, setDetail] = useState<{ id: string; input: unknown } | null>(null);
   async function refresh() {
     const r = await fetch("/api/state");
@@ -171,16 +213,30 @@ function App() {
     );
     return () => clearInterval(t);
   }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setPalette((open) => !open);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  // Tras una acción llega un aviso breve. Con la sesión abierta un fallo también
+  // va en aviso; en la pantalla de acceso se queda escrito bajo el formulario.
   async function act(url: string, body?: unknown, method = "POST") {
     setBusy(true);
     setError("");
     try {
       await api(url, body, method);
       await refresh();
-      setNotice("Cambios guardados");
+      if (url !== "/login" && url !== "/logout") toast.success(done(url, body));
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      if (auth) toast.error(message);
+      else setError(message);
       return false;
     } finally {
       setBusy(false);
@@ -205,1099 +261,275 @@ function App() {
       cancelled = true;
     };
   }, [selected?.id]);
-  useEffect(() => {
-    if (!selected) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelected(null);
-      if (e.key === "Tab") {
-        const els = Array.from(
-          document.querySelectorAll<HTMLElement>(
-            ".modal button:not(:disabled),.modal summary,.modal input",
-          ),
-        );
-        const first = els[0],
-          last = els.at(-1);
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last?.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first?.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      previous?.focus();
-    };
-  }, [selected]);
   if (auth === false)
     return (
       <div className="login">
-        <div className="login-box">
-          <div className="brand">
-            <b className="mark">M</b> meridian<span>LAB</span>
+        <div className="login-card">
+          <div className="login-side">
+            <div className="brand">
+              <b className="mark">M</b> meridian<span>LAB</span>
+            </div>
+            <div>
+              <h1>
+                Tu laboratorio.
+                <br />
+                Tu agente.
+              </h1>
+              <p>
+                Un agente que opera en una cuenta simulada de Alpaca. Aquí ves
+                cada decisión, su motivo y lo que pasó después.
+              </p>
+            </div>
+            <ul>
+              <li>Solo dinero ficticio, en Alpaca Paper</li>
+              <li>Cada decisión queda registrada con su contexto</li>
+              <li>Los límites los pones tú</li>
+            </ul>
           </div>
-          <h1>
-            Tu laboratorio.
-            <br />
-            Tu agente.
-          </h1>
-          <p className="muted">Acceso privado · Solo simulación</p>
           <form
+            className="login-form"
             onSubmit={async (e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
               await act("/login", { password: f.get("password") });
             }}
           >
-            <label>
-              Contraseña
-              <input
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                autoFocus
-              />
-            </label>
-            <button disabled={busy} className="primary">
-              Entrar al laboratorio →
+            <h2>Entrar</h2>
+            <p className="muted">Acceso privado del propietario.</p>
+            <label htmlFor="password">Contraseña</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              autoFocus
+            />
+            {error && (
+              <p role="alert" className="error">
+                {error}
+              </p>
+            )}
+            <button disabled={busy} className="primary with-icon">
+              Entrar al laboratorio <ArrowRight size={16} aria-hidden />
             </button>
           </form>
-          {error && (
-            <p role="alert" className="error">
-              {error}
-            </p>
-          )}
         </div>
       </div>
     );
   if (!data)
     return (
       <div className="login">
-        <p>{error || "Conectando con Meridian…"}</p>
+        <p className="loading" role="status">
+          {!error && <LoaderCircle className="spin" size={18} aria-hidden />}
+          {error || "Conectando con Meridian…"}
+        </p>
       </div>
     );
   const s = data,
     active = s.watches.filter((w) => w.status === "active"),
-    v = s.versions.find((v) => v.id === s.activeVersion)!,
+    unresolved = s.decisions.filter((d) =>
+      ["unknown", "submitting"].includes(d.status),
+    ).length,
     ready = s.connection.alpaca && s.connection.model,
-    alive = s.heartbeat && Date.now() - Date.parse(s.heartbeat) < 120000;
+    alive = Boolean(
+      s.heartbeat && Date.now() - Date.parse(s.heartbeat) < 120000,
+    ),
+    open = marketOpen(s),
+    current = TABS.find((t) => t.name === tab) ?? TABS[0];
   const delta =
     s.account && s.baseline ? Number(s.account.equity) - s.baseline : null;
+  const agent = s.paused
+    ? { kind: "", text: "Pausado" }
+    : !alive
+      ? { kind: "down", text: "Worker sin señal" }
+      : s.modelJob
+        ? { kind: "busy", text: "Evaluando" }
+        : { kind: "on", text: "Observando" };
+  const view = {
+    s,
+    busy,
+    act,
+    openDecision: setSelected,
+    goTo: setTab,
+    setError,
+  };
   return (
     <div className="shell">
       <aside>
         <div className="brand">
           <b className="mark">M</b> meridian<span>LAB</span>
         </div>
-        <div className="workspace">ESPACIO PERSONAL</div>
         <nav aria-label="Navegación principal">
-          {[
-            "Resumen",
-            "Mercado",
-            "Decisiones",
-            "Vigilancias",
-            "Aprendizaje",
-            "Configuración",
-          ].map((name, i) => (
+          {TABS.map((t) => (
             <button
-              key={name}
-              onClick={() => setTab(name)}
-              className={tab === name ? "current" : ""}
+              key={t.name}
+              onClick={() => setTab(t.name)}
+              className={tab === t.name ? "current" : ""}
+              aria-current={tab === t.name ? "page" : undefined}
             >
-              <span>{["◈", "⌁", "≡", "◎", "◇", "⚙"][i]}</span>
-              {name}
-              {name === "Vigilancias" && <small>{active.length}</small>}
+              <t.icon size={18} strokeWidth={1.75} aria-hidden />
+              {t.name}
+              {t.name === "Vigilancias" && active.length > 0 && (
+                <small>{active.length}</small>
+              )}
+              {t.name === "Decisiones" && unresolved > 0 && (
+                <small
+                  className="alert-count"
+                  title={`${unresolved} por reconciliar`}
+                >
+                  {unresolved}
+                </small>
+              )}
             </button>
           ))}
         </nav>
         <div className="aside-bottom">
           <span className="paper">ALPACA PAPER</span>
-          <p>
-            Capital ficticio.
-            <br />
-            Decisiones reales que estudiar.
-          </p>
-          <button onClick={() => act("/logout")}>Cerrar sesión ↗</button>
+          <strong className="num">{money(s.account?.equity)}</strong>
+          <div className="aside-delta">
+            {delta !== null && s.baseline ? (
+              <>
+                <Chip value={(delta / s.baseline) * 100} />
+                <small>desde el inicio</small>
+              </>
+            ) : (
+              <small>Capital ficticio</small>
+            )}
+          </div>
+          <button className="with-icon" onClick={() => act("/logout")}>
+            <LogOut size={16} aria-hidden /> Cerrar sesión
+          </button>
         </div>
       </aside>
       <main>
         <header>
-          <div className="breadcrumb">
-            Laboratorio <span>/</span> {tab}
-          </div>
+          <button
+            type="button"
+            className="search-trigger with-icon"
+            onClick={() => setPalette(true)}
+          >
+            <Search size={15} aria-hidden />
+            <span>Buscar o ir a…</span>
+            <kbd>Ctrl K</kbd>
+          </button>
           <div className="header-right">
-            <span className="badge">Solo simulación</span>
-            <span className={"status " + (!s.paused && alive ? "running" : "")}>
-              {s.paused ? "Pausado" : alive ? "Observando" : "Worker sin señal"}
-            </span>
+            <Hint label={marketText(s)}>
+              <span
+                className={"pill " + (open ? "on" : "")}
+                tabIndex={0}
+                aria-label={"Bolsa de Nueva York: " + marketText(s)}
+              >
+                <i aria-hidden />
+                {!s.feeds?.clock
+                  ? "Sin calendario"
+                  : open
+                    ? "Bolsa abierta"
+                    : "Bolsa cerrada"}
+              </span>
+            </Hint>
+            <Hint
+              label={
+                s.heartbeat
+                  ? "Última señal del worker: " + date(s.heartbeat)
+                  : "El worker no ha dado señal"
+              }
+            >
+              <span
+                className={"pill " + agent.kind}
+                tabIndex={0}
+                aria-label={"Agente: " + agent.text}
+              >
+                <i aria-hidden />
+                {agent.text}
+              </span>
+            </Hint>
+            <span className="badge sim">Solo simulación</span>
           </div>
         </header>
         <div className="content">
           <div className="page-heading">
             <div>
-              <div className="eyebrow">
-                MERIDIAN /{" "}
-                {String(
-                  [
-                    "Resumen",
-                    "Mercado",
-                    "Decisiones",
-                    "Vigilancias",
-                    "Aprendizaje",
-                    "Configuración",
-                  ].indexOf(tab) + 1,
-                ).padStart(2, "0")}
-              </div>
-              <h1>{tab === "Resumen" ? "El pulso de tu agente" : tab}</h1>
-              <p className="muted">
-                {
-                  (
-                    {
-                      Resumen: "Observa sus decisiones. Entiende su evolución.",
-                      Mercado:
-                        "Los mismos datos que recibe el agente para decidir.",
-                      Decisiones:
-                        "Cada hipótesis, su contexto y lo que ocurrió después.",
-                      Vigilancias:
-                        "El agente espera condiciones, no horas en el calendario.",
-                      Aprendizaje:
-                        "Experiencias que se convierten en hipótesis comprobables.",
-                      Configuración:
-                        "Tú defines los límites. El agente decide dentro de ellos.",
-                    } as any
-                  )[tab]
-                }
-              </p>
+              <h1>{current.title}</h1>
+              <p className="muted">{current.text}</p>
             </div>
             <div className="actions">
-              <button disabled={busy} onClick={() => act("/wake")}>
-                Reevaluar
-              </button>
+              <Hint label="Pide al agente una evaluación ahora, sin esperar a un evento.">
+                <button
+                  className="with-icon"
+                  disabled={busy}
+                  onClick={() => act("/wake")}
+                >
+                  <RefreshCw size={15} aria-hidden /> Reevaluar
+                </button>
+              </Hint>
               <button
-                className="primary"
-                disabled={busy || (!s.paused ? false : !ready)}
+                className="primary with-icon"
+                disabled={busy || (s.paused && !ready)}
                 onClick={() => act("/pause", { paused: !s.paused })}
               >
-                {s.paused ? "▶ Activar agente" : "Ⅱ Pausar"}
+                {s.paused ? (
+                  <>
+                    <Play size={15} aria-hidden /> Activar agente
+                  </>
+                ) : (
+                  <>
+                    <Pause size={15} aria-hidden /> Pausar
+                  </>
+                )}
               </button>
             </div>
           </div>
           {error && (
-            <div className="alert error" role="alert">
-              {error}
-              <button onClick={() => setError("")} aria-label="Cerrar error">
-                ×
-              </button>
-            </div>
-          )}
-          {notice && (
-            <div className="alert" role="status">
-              {notice}
-              <button onClick={() => setNotice("")} aria-label="Cerrar aviso">
-                ×
+            <div className="banner down" role="alert">
+              <TriangleAlert size={18} aria-hidden />
+              <p>{error}</p>
+              <button
+                className="icon"
+                onClick={() => setError("")}
+                aria-label="Cerrar error"
+              >
+                <X size={16} aria-hidden />
               </button>
             </div>
           )}
           {!ready && (
-            <div className="setup">
-              <div>
-                <strong>Tu laboratorio está preparado para conectar.</strong>
-                <p>
-                  Configura{" "}
-                  {(!s.connection.alpaca ? "las claves de Alpaca Paper" : "") +
-                    (!s.connection.alpaca && !s.connection.model ? " y " : "") +
-                    (!s.connection.model ? "el proveedor del modelo" : "")}{" "}
-                  en el servidor. El agente permanece pausado.
-                </p>
-              </div>
+            <div className="banner">
+              <PlugZap size={18} aria-hidden />
+              <p>
+                <strong>Tu laboratorio está preparado para conectar.</strong>{" "}
+                Configura{" "}
+                {(!s.connection.alpaca ? "las claves de Alpaca Paper" : "") +
+                  (!s.connection.alpaca && !s.connection.model ? " y " : "") +
+                  (!s.connection.model ? "el proveedor del modelo" : "")}{" "}
+                en el servidor. El agente permanece pausado.
+              </p>
               <button onClick={() => setTab("Configuración")}>
-                Ver conexiones ↗
+                Ver conexiones
               </button>
             </div>
           )}
           {s.feeds && (!s.feeds.trades || !s.feeds.clock) && (
-            <div className="alert error" role="status">
-              Alpaca no está devolviendo{" "}
-              {!s.feeds.trades && !s.feeds.clock
-                ? "precios ni el calendario de mercado"
-                : !s.feeds.trades
-                  ? "precios de mercado"
-                  : "el calendario de mercado"}
-              . El saldo y las posiciones siguen sincronizándose. No se enviarán
-              órdenes hasta que vuelva a responder.
+            <div className="banner down" role="status">
+              <TriangleAlert size={18} aria-hidden />
+              <p>
+                Alpaca no está devolviendo{" "}
+                {!s.feeds.trades && !s.feeds.clock
+                  ? "precios ni el calendario de mercado"
+                  : !s.feeds.trades
+                    ? "precios de mercado"
+                    : "el calendario de mercado"}
+                . El saldo y las posiciones siguen sincronizándose. No se
+                enviarán órdenes hasta que vuelva a responder.
+              </p>
             </div>
           )}
-          {tab === "Resumen" && (
-            <>
-              <div className="metrics">
-                <article>
-                  <label>Patrimonio simulado</label>
-                  <strong>{money(s.account?.equity)}</strong>
-                  <small>Cuenta sincronizada {date(s.lastSync)}</small>
-                </article>
-                <article>
-                  <label>Variación desde el inicio</label>
-                  <strong
-                    className={
-                      delta !== null && delta < 0 ? "negative" : "positive"
-                    }
-                  >
-                    {money(delta)}
-                  </strong>
-                  <small>Incluye cambios de mercado y de saldo</small>
-                </article>
-                <article>
-                  <label>Vigilancias activas</label>
-                  <strong>{active.length.toString().padStart(2, "0")}</strong>
-                  <small>{s.queue.length} eventos pendientes</small>
-                </article>
-                <article>
-                  <label>Evaluaciones hoy · UTC</label>
-                  <strong>
-                    {s.calls.day === new Date().toISOString().slice(0, 10)
-                      ? s.calls.count
-                      : 0}
-                    <em> / {s.settings.maxDailyCalls}</em>
-                  </strong>
-                  <small>
-                    {s.lessons.filter((l) => l.status === "accepted").length}{" "}
-                    lecciones activas
-                  </small>
-                </article>
-              </div>
-              <div className="dashboard-grid">
-                <section className="panel">
-                  <div className="section-title">
-                    <h2>Evolución del patrimonio</h2>
-                    <span className="muted">USD · últimas 120 muestras</span>
-                  </div>
-                  <Chart values={s.equity.slice(-120)} />
-                </section>
-                <section className="panel agent-card">
-                  <div className="section-title">
-                    <h2>Estado del agente</h2>
-                    <span className="orbit">◎</span>
-                  </div>
-                  <h3>
-                    {s.paused
-                      ? "En pausa"
-                      : s.queue.length
-                        ? "Tiene algo que revisar"
-                        : "Esperando una condición"}
-                  </h3>
-                  <p>
-                    {s.paused
-                      ? "Actívalo cuando hayas revisado los límites y las conexiones."
-                      : "La vigilancia funciona sin consultar al modelo en cada cambio de precio."}
-                  </p>
-                  <dl>
-                    <div>
-                      <dt>Conexión de mercado</dt>
-                      <dd>
-                        {s.stream === "connected"
-                          ? "Conectada"
-                          : "Sin señal reciente"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Bolsa de Nueva York</dt>
-                      <dd>{marketText(s)}</dd>
-                    </div>
-                    <div>
-                      <dt>Última evaluación</dt>
-                      <dd>{date(s.lastDecision)}</dd>
-                    </div>
-                    <div>
-                      <dt>Worker</dt>
-                      <dd>{alive ? "Conectado" : "Sin señal"}</dd>
-                    </div>
-                  </dl>
-                </section>
-              </div>
-              <section className="panel">
-                <div className="section-title">
-                  <h2>Posiciones</h2>
-                  <span className="muted">
-                    Efectivo {money(s.account?.cash)}
-                  </span>
-                </div>
-                {!s.positions.length ? (
-                  <Empty>
-                    No hay posiciones. Aquí aparecerán las compras ejecutadas en
-                    Alpaca Paper.
-                  </Empty>
-                ) : (
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Activo</th>
-                          <th>Unidades</th>
-                          <th>Valor</th>
-                          <th>Resultado no realizado</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {s.positions.map((p) => (
-                          <tr key={p.symbol}>
-                            <td>
-                              <strong>{p.symbol}</strong>
-                            </td>
-                            <td>{p.qty}</td>
-                            <td>{money(p.market_value)}</td>
-                            <td>{money(p.unrealized_pl)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
-              <section className="panel">
-                <div className="section-title">
-                  <h2>Actividad reciente</h2>
-                  <span className="muted">Registro del laboratorio</span>
-                </div>
-                {s.events.length ? (
-                  s.events.slice(0, 8).map((e) => (
-                    <div className="event" key={e.id}>
-                      <span className="event-type">{e.type}</span>
-                      <p>{e.message}</p>
-                      <time>{date(e.at)}</time>
-                    </div>
-                  ))
-                ) : (
-                  <Empty>Todo comienza con una primera observación.</Empty>
-                )}
-              </section>
-            </>
-          )}
-          {tab === "Mercado" && (
-            <>
-              {!Object.keys(s.analysis || {}).length ? (
-                <section className="panel">
-                  <Empty>
-                    El análisis aparecerá tras la primera descarga de velas
-                    diarias. El worker la repite cada cinco minutos.
-                  </Empty>
-                </section>
-              ) : (
-                s.settings.symbols.map((symbol) => {
-                  const a = s.analysis[symbol];
-                  if (!a) return null;
-                  const i = a.indicators;
-                  const filas: [string, string][] = i
-                    ? [
-                        ["Precio", money(i.price)],
-                        ["Media de 20 sesiones", money(i.sma20)],
-                        ["Media de 50 sesiones", money(i.sma50)],
-                        ["Media de 200 sesiones", money(i.sma200)],
-                        [
-                          "Distancia a la media de 20",
-                          i.distanceToSma20Pct === null
-                            ? "—"
-                            : `${i.distanceToSma20Pct} %`,
-                        ],
-                        [
-                          "Variación en 1 sesión",
-                          i.changePct1d === null ? "—" : `${i.changePct1d} %`,
-                        ],
-                        [
-                          "Variación en 5 sesiones",
-                          i.changePct5d === null ? "—" : `${i.changePct5d} %`,
-                        ],
-                        [
-                          "Variación en 20 sesiones",
-                          i.changePct20d === null ? "—" : `${i.changePct20d} %`,
-                        ],
-                        [
-                          "Movimiento diario habitual",
-                          i.atr14Pct === null
-                            ? "—"
-                            : `${money(i.atr14)} (${i.atr14Pct} %)`,
-                        ],
-                        ["Máximo de 52 semanas", money(i.high52w)],
-                        ["Mínimo de 52 semanas", money(i.low52w)],
-                        [
-                          "Posición en ese rango",
-                          i.positionIn52wRangePct === null
-                            ? "—"
-                            : `${i.positionIn52wRangePct} %`,
-                        ],
-                        [
-                          "Volumen frente a su media",
-                          i.volumeRatio20 === null
-                            ? "—"
-                            : `${i.volumeRatio20} veces`,
-                        ],
-                      ]
-                    : [];
-                  const d5 = s.intraday?.[symbol];
-                  const pct = (v: number | null) =>
-                    v === null ? "—" : `${v} %`;
-                  if (d5)
-                    filas.push(
-                      [`Sesión del ${d5.date} (5 min)`, `${d5.barsUsed} velas`],
-                      ["Precio medio del día (VWAP)", money(d5.vwap)],
-                      ["Cambio desde la apertura", pct(d5.changeFromOpenPct)],
-                      ["Cambio en 30 minutos", pct(d5.change30mPct)],
-                      ["Cambio en 60 minutos", pct(d5.change60mPct)],
-                      [
-                        "Posición en el rango del día",
-                        pct(d5.positionInDayRangePct),
-                      ],
-                    );
-                  return (
-                    <section className="panel" key={symbol}>
-                      <div className="section-title">
-                        <h2>{symbol}</h2>
-                        <span className="muted">
-                          {a.barsUsed} sesiones · calculado {date(a.at)}
-                        </span>
-                      </div>
-                      {a.today ? (
-                        <p className="muted">
-                          Sesión en curso: abrió en {money(a.today.open)},
-                          máximo {money(a.today.high)}, mínimo{" "}
-                          {money(a.today.low)}, cierre anterior{" "}
-                          {money(a.today.prevClose)}
-                          {a.today.changePct === null
-                            ? ""
-                            : ` (${a.today.changePct} %)`}
-                          .
-                        </p>
-                      ) : (
-                        a.lastSession && (
-                          <p className="muted">
-                            Última sesión ({a.lastSession.date}): cerró en{" "}
-                            {money(a.lastSession.close)}, máximo{" "}
-                            {money(a.lastSession.high)}, mínimo{" "}
-                            {money(a.lastSession.low)}
-                            {a.lastSession.changePct === null
-                              ? ""
-                              : ` (${a.lastSession.changePct} %)`}
-                            .
-                          </p>
-                        )
-                      )}
-                      {!i ? (
-                        <Empty>
-                          Sin sesiones suficientes para calcular indicadores.
-                        </Empty>
-                      ) : (
-                        <div className="table-wrap">
-                          <table>
-                            <tbody>
-                              {filas.map(([k, v]) => (
-                                <tr key={k}>
-                                  <td>{k}</td>
-                                  <td>
-                                    <strong>{v}</strong>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                      {a.barsDiscarded > 0 && (
-                        <p className="muted source">
-                          Se descartaron {a.barsDiscarded} sesiones porque el
-                          proveedor las dio con datos imposibles. No entran en
-                          ningún cálculo.
-                        </p>
-                      )}
-                      <p className="muted source">Origen: {a.source}</p>
-                    </section>
-                  );
-                })
-              )}
-            </>
-          )}
-          {tab === "Mercado" && (
-            <section className="panel">
-              <div className="section-title">
-                <h2>Noticias que está viendo</h2>
-                <span className="muted">
-                  {(s.stories || []).length} de las últimas 48 horas
-                </span>
-              </div>
-              {!(s.stories || []).length ? (
-                <Empty>
-                  Aquí aparecerán los titulares sobre tus activos. El worker los
-                  busca cada media hora.
-                </Empty>
-              ) : (
-                [...(s.stories || [])].reverse().map((n) => {
-                  const comentario = [...s.decisions]
-                    .reverse()
-                    .flatMap((d) => d.newsCommented ?? [])
-                    .find((c) => c.storyId === n.id);
-                  return (
-                    <div className="event" key={n.id}>
-                      <p>
-                        <strong>{n.headline}</strong>
-                        <br />
-                        {comentario && (
-                          <>
-                            <span className="preserve">
-                              <b>Lo que opina: </b>
-                              {comentario.comment}
-                            </span>
-                            <br />
-                          </>
-                        )}
-                        {n.summary && (
-                          <span className="muted">{n.summary}</span>
-                        )}
-                        <br />
-                        <small>
-                          {n.symbols.join(", ")} · {n.source}
-                          {n.url && (
-                            <>
-                              {" · "}
-                              <a href={n.url} target="_blank" rel="noreferrer">
-                                leer ↗
-                              </a>
-                            </>
-                          )}
-                        </small>
-                      </p>
-                      <time>{date(n.at)}</time>
-                    </div>
-                  );
-                })
-              )}
-            </section>
-          )}
-          {tab === "Decisiones" && (
-            <section className="panel">
-              <div className="section-title">
-                <h2>Historial completo</h2>
-                <span className="muted">{s.totals.decisions} decisiones</span>
-              </div>
-              {!s.decisions.length ? (
-                <Empty>
-                  Cuando el agente evalúe un evento, guardará aquí su
-                  información, hipótesis y decisión.
-                </Empty>
-              ) : (
-                <div className="decision-list">
-                  {[...s.decisions].reverse().map((d) => (
-                    <button
-                      className="decision"
-                      key={d.id}
-                      onClick={() => setSelected(d)}
-                    >
-                      <div>
-                        <Badge value={d.proposal.action} />
-                        <strong>{d.proposal.symbol || "Mercado"}</strong>
-                        <time>{date(d.at)}</time>
-                      </div>
-                      <p>{d.proposal.reason}</p>
-                      <div>
-                        <Badge value={d.status} />
-                        <span className="muted">
-                          {d.review
-                            ? "Revisión disponible"
-                            : d.reviewSkipped
-                              ? "Sin revisión"
-                              : "Revisar " + date(d.reviewAt)}
-                        </span>
-                        <span>Ver detalle ↗</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-          {tab === "Vigilancias" && (
-            <>
-              <div className="section-title">
-                <h2>{active.length} condiciones en observación</h2>
-                <button onClick={() => setShowWatch(!showWatch)}>
-                  + Nueva vigilancia
-                </button>
-              </div>
-              {showWatch && (
-                <form
-                  className="panel form-grid"
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    const f = new FormData(e.currentTarget);
-                    if (
-                      await act("/watches", {
-                        symbol: f.get("symbol"),
-                        operator: f.get("operator"),
-                        price: Number(f.get("price")),
-                        expiresAt: new Date(
-                          String(f.get("expires")),
-                        ).toISOString(),
-                        reason: f.get("reason"),
-                        invalidateBelow: f.get("below")
-                          ? Number(f.get("below"))
-                          : null,
-                        invalidateAbove: f.get("above")
-                          ? Number(f.get("above"))
-                          : null,
-                      })
-                    )
-                      setShowWatch(false);
-                  }}
-                >
-                  <label>
-                    Activo
-                    <select name="symbol">
-                      {s.settings.symbols.map((x) => (
-                        <option key={x}>{x}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Condición
-                    <select name="operator">
-                      <option value="lte">Precio igual o menor que</option>
-                      <option value="gte">Precio igual o mayor que</option>
-                    </select>
-                  </label>
-                  <label>
-                    Precio USD
-                    <input
-                      name="price"
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      required
-                    />
-                  </label>
-                  <label>
-                    Caducidad local
-                    <input name="expires" type="datetime-local" required />
-                  </label>
-                  <label>
-                    Invalidar por debajo (opcional)
-                    <input name="below" type="number" min="0.01" step="0.01" />
-                  </label>
-                  <label>
-                    Invalidar por encima (opcional)
-                    <input name="above" type="number" min="0.01" step="0.01" />
-                  </label>
-                  <label className="wide">
-                    Qué debe reevaluar
-                    <textarea
-                      name="reason"
-                      minLength={5}
-                      maxLength={2000}
-                      required
-                    />
-                  </label>
-                  <button className="primary" disabled={busy}>
-                    Guardar vigilancia
-                  </button>
-                </form>
-              )}
-              <div className="watch-grid">
-                {[...s.watches].reverse().map((w) => (
-                  <article className="panel watch-card" key={w.id}>
-                    <div className="section-title">
-                      <h2>{w.symbol}</h2>
-                      <Badge value={w.status} />
-                    </div>
-                    <div className="target">
-                      {w.operator === "lte" ? "≤" : "≥"} {money(w.price)}
-                    </div>
-                    <p>{w.reason}</p>
-                    <p className="muted source">
-                      {w.decisionId ? (
-                        <button
-                          className="link"
-                          onClick={() => {
-                            const d = s.decisions.find(
-                              (x) => x.id === w.decisionId,
-                            );
-                            if (d) setSelected(d);
-                            else
-                              setError(
-                                "La decisión que creó esta vigilancia ya no está en el historial reciente.",
-                              );
-                          }}
-                        >
-                          Creada por el agente · ver su decisión ↗
-                        </button>
-                      ) : (
-                        "Creada por ti desde el panel"
-                      )}
-                    </p>
-                    <dl>
-                      <div>
-                        <dt>Último precio</dt>
-                        <dd>{money(s.quotes[w.symbol]?.price)}</dd>
-                      </div>
-                      <div>
-                        <dt>Fecha del precio</dt>
-                        <dd>{date(s.quotes[w.symbol]?.at)}</dd>
-                      </div>
-                      <div>
-                        <dt>Caduca</dt>
-                        <dd>{date(w.expiresAt)}</dd>
-                      </div>
-                      {w.invalidateBelow && (
-                        <div>
-                          <dt>Invalidar ≤</dt>
-                          <dd>{money(w.invalidateBelow)}</dd>
-                        </div>
-                      )}
-                      {w.invalidateAbove && (
-                        <div>
-                          <dt>Invalidar ≥</dt>
-                          <dd>{money(w.invalidateAbove)}</dd>
-                        </div>
-                      )}
-                    </dl>
-                    <div className="between">
-                      <small>Activación única · Reevaluar</small>
-                      {w.status === "active" && (
-                        <button
-                          disabled={busy}
-                          onClick={() => act(`/watches/${w.id}/cancel`)}
-                        >
-                          Cancelar
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
-              {!s.watches.length && (
-                <section className="panel">
-                  <Empty>
-                    Añade una condición o deja que el agente proponga sus
-                    propias vigilancias al analizar el mercado.
-                  </Empty>
-                </section>
-              )}
-            </>
-          )}
-          {tab === "Aprendizaje" && (
-            <>
-              <div className="section-title">
-                <h2>Memoria del agente</h2>
-                <button onClick={() => setShowLesson(!showLesson)}>
-                  + Aportar conocimiento
-                </button>
-              </div>
-              <p className="muted">
-                El agente incorpora solo las lecciones de revisar sus
-                operaciones, hasta 15 activas: al pasar el tope se retira la más
-                antigua. Cada cambio crea una versión. Puedes descartar una
-                lección o recuperar una versión anterior en Configuración.
-              </p>
-              {showLesson && (
-                <form
-                  className="panel form-grid"
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    const f = new FormData(e.currentTarget);
-                    if (await act("/lessons", Object.fromEntries(f)))
-                      setShowLesson(false);
-                  }}
-                >
-                  <label className="wide">
-                    Título
-                    <input
-                      name="title"
-                      minLength={3}
-                      maxLength={150}
-                      required
-                    />
-                  </label>
-                  <label className="wide">
-                    Lección, contexto y excepciones
-                    <textarea
-                      name="body"
-                      minLength={10}
-                      maxLength={4000}
-                      required
-                    />
-                  </label>
-                  <label className="wide">
-                    Fuente o referencia
-                    <input
-                      name="source"
-                      minLength={3}
-                      maxLength={1000}
-                      placeholder="URL, libro, experiencia documentada…"
-                      required
-                    />
-                  </label>
-                  <button className="primary" disabled={busy}>
-                    Añadir a su memoria
-                  </button>
-                </form>
-              )}
-              {!s.lessons.length ? (
-                <section className="panel">
-                  <Empty>
-                    Aquí se reunirán las lecciones de sus revisiones y el
-                    conocimiento que tú aportes.
-                  </Empty>
-                </section>
-              ) : (
-                [...s.lessons].reverse().map((l) => (
-                  <article className="panel lesson" key={l.id}>
-                    <div className="section-title">
-                      <h2>{l.title}</h2>
-                      <Badge value={l.status} />
-                    </div>
-                    <p className="preserve">{l.body}</p>
-                    <p className="muted source">Fuente: {l.source}</p>
-                    <div className="between">
-                      <span className="muted">{date(l.createdAt)}</span>
-                      <div className="actions">
-                        {l.status !== "rejected" && (
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              act(`/lessons/${l.id}/status`, {
-                                status: "rejected",
-                              })
-                            }
-                          >
-                            Descartar
-                          </button>
-                        )}
-                        {l.status !== "accepted" && (
-                          <button
-                            className="primary"
-                            disabled={busy}
-                            onClick={() =>
-                              act(`/lessons/${l.id}/status`, {
-                                status: "accepted",
-                              })
-                            }
-                          >
-                            Activar en nueva versión
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </article>
-                ))
-              )}
-            </>
-          )}
-          {tab === "Configuración" && (
-            <>
-              <div className="connections">
-                <section className="panel">
-                  <h2>Alpaca Paper</h2>
-                  <Badge
-                    value={
-                      s.connection.alpaca ? "Configurado" : "Sin configurar"
-                    }
-                  />
-                  <p>
-                    Claves de simulación en ALPACA_KEY_ID y ALPACA_SECRET_KEY.
-                    La conexión se verifica al sincronizar la cuenta.
-                  </p>
-                  <small>Última sincronización: {date(s.lastSync)}</small>
-                </section>
-                <section className="panel">
-                  <h2>Avisos por Telegram</h2>
-                  <Badge
-                    value={
-                      s.connection.telegram ? "Configurado" : "Sin configurar"
-                    }
-                  />
-                  <p>
-                    Escribe cuando opera, cuando una orden se ejecuta y cuando
-                    algo falla. Se configura en el servidor con TELEGRAM_TOKEN y
-                    TELEGRAM_CHAT_ID.
-                  </p>
-                  <small>El bot solo informa, no acepta órdenes.</small>
-                </section>
-                <section className="panel">
-                  <h2>Modelo</h2>
-                  <Badge
-                    value={
-                      s.connection.model ? "Configurado" : "Sin configurar"
-                    }
-                  />
-                  <p>
-                    {s.connection.modelName ||
-                      "Configura LLM_API_KEY y LLM_MODEL en el servidor."}
-                  </p>
-                  <small>
-                    Compatible con Chat Completions y respuesta JSON.
-                  </small>
-                </section>
-              </div>
-              <form
-                className="panel form-grid"
-                key={JSON.stringify(s.settings)}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const f = new FormData(e.currentTarget),
-                    values: any = {};
-                  for (const [k, val] of f)
-                    values[k] =
-                      k === "symbols"
-                        ? String(val)
-                            .split(",")
-                            .map((x) => x.trim().toUpperCase())
-                            .filter(Boolean)
-                        : Number(val);
-                  act("/settings", values, "PUT");
-                }}
-              >
-                <h2 className="wide">Límites operativos</h2>
-                <label className="wide">
-                  Activos permitidos, separados por comas
-                  <input
-                    name="symbols"
-                    defaultValue={s.settings.symbols.join(", ")}
-                    required
-                  />
-                </label>
-                {(
-                  [
-                    ["maxOrderUsd", "Máximo por orden · USD", 1, 10000],
-                    ["maxPositionUsd", "Máximo por posición · USD", 1, 100000],
-                    ["maxExposureUsd", "Exposición máxima · USD", 1, 100000],
-                    ["maxDailyOrders", "Órdenes diarias · UTC", 1, 100],
-                    [
-                      "maxDailyCalls",
-                      "Llamadas al modelo al día · UTC",
-                      1,
-                      200,
-                    ],
-                    [
-                      "maxDrawdownPct",
-                      "Pérdida desde saldo inicial · %",
-                      1,
-                      50,
-                    ],
-                    [
-                      "cooldownSeconds",
-                      "Espera mínima entre evaluaciones · segundos",
-                      60,
-                      86400,
-                    ],
-                  ] as const
-                ).map(([k, label, min, max]) => (
-                  <label key={k}>
-                    {label}
-                    <input
-                      name={k}
-                      type="number"
-                      min={min}
-                      max={max}
-                      step="1"
-                      defaultValue={s.settings[k]}
-                      required
-                    />
-                  </label>
-                ))}
-                <p className="muted wide">
-                  El umbral de pérdida bloquea compras nuevas. Pausar no vende
-                  posiciones ni cancela órdenes ya enviadas.
-                </p>
-                <button className="primary" disabled={busy}>
-                  Guardar límites
-                </button>
-              </form>
-              <form
-                className="panel"
-                key={v.id}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const f = new FormData(e.currentTarget);
-                  act("/versions", Object.fromEntries(f));
-                }}
-              >
-                <div className="section-title">
-                  <h2>Instrucciones del agente</h2>
-                  <span className="muted">{s.versions.length} versiones</span>
-                </div>
-                <label>
-                  Instrucciones activas
-                  <textarea
-                    name="instructions"
-                    defaultValue={v.instructions}
-                    minLength={30}
-                    maxLength={12000}
-                    rows={7}
-                    required
-                  />
-                </label>
-                <label>
-                  Motivo del cambio
-                  <input
-                    name="note"
-                    minLength={3}
-                    maxLength={300}
-                    required
-                    placeholder="Qué esperas mejorar con esta versión"
-                  />
-                </label>
-                <button className="primary" disabled={busy}>
-                  Crear y activar versión
-                </button>
-              </form>
-              <section className="panel">
-                <h2>Versiones</h2>
-                {[...s.versions].reverse().map((x) => (
-                  <div className="event" key={x.id}>
-                    <p>
-                      <strong>{x.note}</strong>
-                      <br />
-                      <small>
-                        {date(x.createdAt)} · {x.lessonIds.length} lecciones
-                      </small>
-                    </p>
-                    {x.id === s.activeVersion ? (
-                      <Badge value="Activa" />
-                    ) : (
-                      <button
-                        disabled={busy}
-                        onClick={() => act(`/versions/${x.id}/activate`)}
-                      >
-                        Recuperar
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </section>
-              <section className="panel">
-                <h2>Detener operaciones pendientes</h2>
-                <p>
-                  Pausa el agente y solicita a Alpaca cancelar todas las órdenes
-                  abiertas de esta cuenta. Usa una cuenta Paper exclusiva para
-                  Meridian.
-                </p>
-                <button
-                  className="danger"
-                  disabled={busy || !s.connection.alpaca}
-                  onClick={() => {
-                    if (
-                      confirm(
-                        "¿Pausar y solicitar la cancelación de todas las órdenes abiertas de esta cuenta Paper?",
-                      )
-                    )
-                      act("/orders/cancel-open");
-                  }}
-                >
-                  Pausar y cancelar órdenes
-                </button>
-              </section>
-            </>
-          )}
+          {tab === "Resumen" && <Summary {...view} />}
+          {tab === "Mercado" && <Market {...view} />}
+          {tab === "Decisiones" && <Decisions {...view} />}
+          {tab === "Vigilancias" && <Watches {...view} />}
+          {tab === "Aprendizaje" && <Learning {...view} />}
+          {tab === "Configuración" && <SettingsView {...view} />}
           <footer>
             MERIDIAN <span>Laboratorio personal de agentes · v0.1</span>
             <span>Datos de tu cuenta. Sin resultados de ejemplo.</span>
@@ -1305,165 +537,36 @@ function App() {
         </div>
       </main>
       {selected && (
-        <div className="modal-backdrop" onClick={() => setSelected(null)}>
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="detail-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="section-title">
-              <h2 id="detail-title">
-                Decisión · {selected.proposal.symbol || "Mercado"}
-              </h2>
-              <button
-                onClick={() => setSelected(null)}
-                autoFocus
-                aria-label="Cerrar detalle"
-              >
-                ×
-              </button>
-            </div>
-            <Badge value={selected.proposal.action} />
-            <Badge value={selected.status} />
-            {selected.proposal.note && (
-              <p className="preserve">
-                <strong>{selected.proposal.note}</strong>
-              </p>
-            )}
-            <p>{selected.proposal.reason}</p>
-            <h3>Hipótesis</h3>
-            <p>{selected.proposal.hypothesis}</p>
-            <h3>Evento que la activó</h3>
-            <p>{selected.event}</p>
-            <dl>
-              <div>
-                <dt>Unidades</dt>
-                <dd>{selected.proposal.qty ?? "—"}</dd>
-              </div>
-              <div>
-                <dt>Precio límite</dt>
-                <dd>{money(selected.proposal.limitPrice)}</dd>
-              </div>
-              <div>
-                <dt>Versión</dt>
-                <dd>{selected.versionId.slice(0, 8)}</dd>
-              </div>
-            </dl>
-            {selected.error && <p className="error">{selected.error}</p>}
-            <h3>
-              Vigilancias que dejó puestas
-              {selected.proposal.watches.length > 0 &&
-                ` (${selected.proposal.watches.length})`}
-            </h3>
-            {!selected.proposal.watches.length ? (
-              <p className="muted">
-                En esta decisión no pidió vigilar ninguna condición de precio.
-              </p>
-            ) : (
-              selected.proposal.watches.map((w, i) => {
-                const guardada = s.watches.find(
-                  (x) =>
-                    x.decisionId === selected.id &&
-                    x.symbol === w.symbol &&
-                    x.price === w.price &&
-                    x.operator === w.operator,
-                );
-                return (
-                  <div className="event" key={i}>
-                    <p>
-                      <strong>
-                        {w.symbol} {w.operator === "lte" ? "≤" : "≥"}{" "}
-                        {money(w.price)}
-                      </strong>
-                      <br />
-                      {w.reason}
-                      <br />
-                      <small>
-                        Caduca {date(w.expiresAt)}
-                        {w.invalidateBelow
-                          ? ` · se invalida por debajo de ${money(w.invalidateBelow)}`
-                          : ""}
-                        {w.invalidateAbove
-                          ? ` · se invalida por encima de ${money(w.invalidateAbove)}`
-                          : ""}
-                      </small>
-                    </p>
-                    {guardada ? (
-                      <Badge value={guardada.status} />
-                    ) : (
-                      <span className="muted">
-                        <small>Fuera de límites, no se guardó</small>
-                      </span>
-                    )}
-                  </div>
-                );
-              })
-            )}
-            {/* Solo las decisiones antiguas traen lecciones: ahora salen de las revisiones. */}
-            {selected.proposal.lessons.length > 0 && (
-              <>
-                <h3>Lecciones que propuso</h3>
-                {selected.proposal.lessons.map((l, i) => (
-                  <div className="event" key={i}>
-                    <p>
-                      <strong>{l.title}</strong>
-                      <br />
-                      {l.body}
-                    </p>
-                  </div>
-                ))}
-              </>
-            )}
-            <h3>Revisión posterior</h3>
-            <p className="preserve">
-              {selected.review?.text ||
-                selected.reviewSkipped ||
-                "Pendiente: " + date(selected.reviewAt)}
-            </p>
-            {["unknown", "submitting"].includes(selected.status) && (
-              <button
-                disabled={busy}
-                onClick={async () => {
-                  if (await act(`/orders/${selected.id}/reconcile`))
-                    setSelected(null);
-                }}
-              >
-                Reconciliar con Alpaca
-              </button>
-            )}
-            {selected.status === "unknown" && (
-              <button
-                disabled={busy}
-                onClick={async () => {
-                  if (
-                    confirm(
-                      "Comprueba primero en Alpaca. Esta acción verifica que la orden no existe (404) y resuelve la intención sin reenviarla. ¿Continuar?",
-                    ) &&
-                    (await act(`/orders/${selected.id}/confirm-absent`))
-                  )
-                    setSelected(null);
-                }}
-              >
-                Verificar que no se envió
-              </button>
-            )}
-            <details>
-              <summary>Información disponible al decidir</summary>
-              <pre>
-                {detail?.id !== selected.id
-                  ? "Cargando…"
-                  : detail.input === null
-                    ? "El contexto guardado solo se conserva para las decisiones recientes."
-                    : JSON.stringify(detail.input, null, 2)}
-              </pre>
-            </details>
-            <small>ID: {selected.id}</small>
-          </section>
-        </div>
+        <DecisionDetail
+          s={s}
+          busy={busy}
+          act={act}
+          selected={selected}
+          setSelected={setSelected}
+          detail={detail}
+        />
       )}
+      <Palette
+        open={palette}
+        onOpenChange={setPalette}
+        s={s}
+        busy={busy}
+        ready={ready}
+        goTo={setTab}
+        openDecision={setSelected}
+        act={act}
+      />
     </div>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <Tooltip.Provider>
+    <App />
+    <Toaster
+      position="bottom-right"
+      theme="system"
+      closeButton
+      toastOptions={{ className: "toast" }}
+    />
+  </Tooltip.Provider>,
+);

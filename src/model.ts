@@ -1,6 +1,7 @@
 import { proposalSchema, type State, type Decision } from "./domain.ts";
 import { pendingRefs } from "./news.ts";
 import { marketClock } from "./clock.ts";
+import { BARS_KEPT, INTRADAY_KEPT } from "./market.ts";
 // Con el análisis en el contexto la respuesta razonada es más larga que antes.
 export const MAX_ANSWER_TOKENS = 8000,
   MODEL_TIMEOUT_MS = 45000;
@@ -88,17 +89,25 @@ export function context(s: State, event: string) {
           barsUsed: a.barsUsed,
           barsDiscarded: a.barsDiscarded,
           // Las sesiones recientes en crudo, por si quiere mirar el detalle en
-          // lugar de fiarse solo de los indicadores ya calculados.
-          recentBars: bars > 0 ? a.bars.slice(-bars) : [],
+          // lugar de fiarse solo de los indicadores ya calculados. Se guarda un
+          // año entero para las gráficas del panel: aquí nunca pasan de 20.
+          recentBars: bars > 0 ? a.bars.slice(-Math.min(bars, BARS_KEPT)) : [],
         },
       ]),
     ),
     // La última sesión por dentro. El resumen siempre va; las velas en crudo se
-    // recortan si falta sitio.
+    // recortan si falta sitio. La sesión entera se guarda para el panel; aquí
+    // nunca pasan de 12.
     intraday: Object.fromEntries(
       Object.entries(s.intraday ?? {}).map(([symbol, d]) => [
         symbol,
-        { ...d, bars: intradayBars > 0 ? d.bars.slice(-intradayBars) : [] },
+        {
+          ...d,
+          bars:
+            intradayBars > 0
+              ? d.bars.slice(-Math.min(intradayBars, INTRADAY_KEPT))
+              : [],
+        },
       ]),
     ),
     // Texto escrito por terceros. Entra como dato, nunca como instrucción.

@@ -1,0 +1,194 @@
+/* Gráficas de la pestaña Mercado */
+.mk-chart-panel .section-title {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.mk-chart-panel .section-title h2 {
+  margin-bottom: 2px;
+}
+.mk-chart {
+  position: relative;
+  height: 400px;
+  min-width: 0;
+}
+.mk-chart.small {
+  height: 220px;
+  margin: 4px 0 8px;
+}
+.mk-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 20px;
+  padding: 10px 0 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.8125rem;
+}
+.mk-day {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  font-weight: 600;
+  min-width: 11ch;
+}
+.mk-day button.link {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.mk-readout dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+}
+.mk-readout dt {
+  display: inline;
+  margin-right: 6px;
+  color: var(--muted);
+}
+.mk-readout dd {
+  display: inline;
+  margin: 0;
+  color: var(--ink);
+}
+.mk-onday {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-basis: 100%;
+}
+.mk-trade {
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.mk-trade.up {
+  color: var(--up);
+  background: var(--up-soft);
+  border-color: transparent;
+}
+.mk-trade.down {
+  color: var(--down);
+  background: var(--down-soft);
+  border-color: transparent;
+}
+.mk-watch-note {
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+/* Muestra de línea para leyendas: el trazo es el mismo que en la gráfica. */
+.mk-key {
+  display: inline-block;
+  width: 16px;
+  height: 0;
+  margin-right: 6px;
+  vertical-align: middle;
+  border-top: 2px solid var(--ink);
+}
+.mk-key.s20,
+.mk-key.vwap {
+  border-top-color: var(--series);
+}
+.mk-key.s50 {
+  border-top-color: var(--series-2);
+}
+.mk-key.watch {
+  border-top: 2px dashed var(--warn);
+}
+.mk-key.entry {
+  border-top: 2px dotted var(--ink-2);
+}
+.mk-key.iex {
+  border-top-style: dashed;
+}
+.mk-key.open {
+  border-top: 1px dashed var(--muted);
+}
+.mk-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding-top: 8px;
+}
+.mk-history {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.mk-history h3 {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.mk-history ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 6px 16px;
+}
+.mk-history li > button,
+.mk-history li > div {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 6ch 1.2em 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  text-align: left;
+  color: var(--ink);
+}
+.mk-history li > button:hover {
+  border-color: var(--line-2);
+  background: var(--surface-2);
+}
+.mk-history li > div {
+  border-style: dashed;
+}
+.mk-history .num {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.mk-arrow.up {
+  color: var(--up);
+}
+.mk-arrow.down {
+  color: var(--down);
+}
+.mk-arrow.watch {
+  color: var(--warn);
+}
+.mk-chart:focus-visible,
+.mk-history button:focus-visible,
+.mk-trade:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+@media (max-width: 720px) {
+  .mk-chart {
+    height: 320px;
+  }
+  .mk-chart.small {
+    height: 200px;
+  }
+  .mk-history ul {
+    grid-template-columns: 1fr;
+  }
+  .mk-readout dl {
+    gap: 2px 14px;
+  }
+}
