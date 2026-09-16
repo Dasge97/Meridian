@@ -9,6 +9,8 @@ import {
   orderGuard,
   orderIntent,
   riskProfileOf,
+  buyRoomUsd,
+  groupOf,
   knownIntent,
   intentLabel,
   RISK_PROFILES,
@@ -35,6 +37,7 @@ import {
   decide,
   recentDecisions,
   reviewContext,
+  riskContext,
   riskInstructions,
 } from "../src/model.ts";
 import { decisionNotice, orderNotice, reviewNotice } from "../src/report.ts";
@@ -158,7 +161,16 @@ test("Each level adds its own concrete block of instructions", () => {
   assert.match(texto("active"), /dato macro/);
   assert.doesNotMatch(texto("balanced"), /Motivo N:/);
   assert.match(texto("aggressive"), /varias operaciones por sesión/);
-  assert.match(texto("aggressive"), /confirmación parcial/);
+  assert.doesNotMatch(texto("aggressive"), /confirmación parcial/);
+  assert.match(texto("aggressive"), /last está por encima de vwap/);
+  assert.match(texto("aggressive"), /risk.maxPositionsPerGroup/);
+  assert.match(texto("aggressive"), /vender la posición más floja/);
+  for (const level of LEVELS)
+    assert.match(texto(level), /risk.buyRoomUsd dice, por activo/);
+  assert.match(
+    texto("active"),
+    /\(5\) Nada cumple las condiciones de tu nivel/,
+  );
   assert.match(
     texto("aggressive"),
     /reduce o cierra lo que tengas antes de abrir nada nuevo/,
@@ -622,4 +634,121 @@ test("Old decisions with a short intent are still read as a sale or a purchase",
   assert.equal(claimIntent(s, true), null);
   assert.equal(pendiente.status, "blocked");
   assert.equal(pendiente.error, "No se permiten posiciones cortas");
+});
+
+test("Active and aggressive cannot open a third position in the same group", () => {
+  const compra = (symbol: string) =>
+    proposal({ action: "buy", symbol, qty: 1, limitPrice: 200 });
+  for (const level of LEVELS) {
+    const s = state(level);
+    s.settings.symbols = ["AAPL", "META", "GOOGL", "NVDA", "SPY"];
+    s.account.cash = "100000";
+    for (const x of ["META", "GOOGL", "NVDA", "SPY"])
+      s.quotes[x] = { price: 200, at: now() };
+    s.positions = [{ symbol: "META", qty: "1", market_value: "200" }];
+    s.orders = [
+      {
+        symbol: "GOOGL",
+        side: "buy",
+        status: "new",
+        qty: "1",
+        limit_price: "200",
+      },
+    ];
+    const limita = level === "active" || level === "aggressive";
+    // META y la compra abierta de GOOGL ya son dos grandes tecnológicas.
+    assert.equal(
+      orderGuard(s, compra("AAPL")),
+      limita ? "Demasiadas posiciones del mismo grupo" : null,
+      level,
+    );
+    // Ampliar la que ya tiene y abrir en otro grupo siguen valiendo.
+    assert.equal(orderGuard(s, compra("META")), null, level);
+    assert.equal(orderGuard(s, compra("NVDA")), null, level);
+    // Vender nunca se frena por grupos.
+    s.positions.push({ symbol: "AAPL", qty: "1", market_value: "200" });
+    assert.equal(
+      orderGuard(
+        s,
+        proposal({ action: "sell", symbol: "AAPL", qty: 1, limitPrice: 200 }),
+      ),
+      null,
+      level,
+    );
+  }
+  assert.equal(groupOf("NVDA"), groupOf("AMD"));
+  assert.notEqual(groupOf("NVDA"), groupOf("AAPL"));
+  assert.equal(
+    groupOf("XYZ"),
+    "XYZ",
+    "un activo desconocido es su propio grupo",
+  );
+});
+
+test("The agent is told how much it can still buy of each symbol", () => {
+  // El caso del 16/09/2026: 38.487 invertidos de 40.000.
+  const s = state("aggressive");
+  s.settings = {
+    ...s.settings,
+    symbols: ["NVDA", "MSFT", "AAPL"],
+    maxOrderUsd: 5000,
+    maxPositionUsd: 15000,
+    maxExposureUsd: 40000,
+  };
+  s.account.cash = "61642";
+  s.positions = [
+    { symbol: "NVDA", qty: "69", market_value: "14825" },
+    { symbol: "AAPL", qty: "14", market_value: "4670" },
+    { symbol: "SPY", qty: "20", market_value: "14000" },
+    { symbol: "GLD", qty: "13", market_value: "4992" },
+  ];
+  s.orders = [];
+  assert.equal(buyRoomUsd(s, "MSFT"), 1513, "lo que queda de exposición");
+  assert.equal(buyRoomUsd(s, "NVDA"), 175, "lo que queda de la posición");
+  s.settings.maxExposureUsd = 90000;
+  assert.equal(buyRoomUsd(s, "MSFT"), 5000, "el tope por orden");
+  s.orders = [
+    {
+      symbol: "MSFT",
+      side: "buy",
+      status: "new",
+      qty: "10",
+      limit_price: "495",
+    },
+  ];
+  assert.equal(buyRoomUsd(s, "MSFT"), 0, "ya tiene una orden abierta");
+  assert.equal(buyRoomUsd(s, "AAPL"), 5000);
+  s.account.cash = "4000";
+  assert.equal(buyRoomUsd(s, "AAPL"), 0, "el efectivo lo tiene comprometido");
+  // Lo que dice buyRoomUsd pasa orderGuard.
+  s.account.cash = "61642";
+  s.orders = [];
+  s.settings.maxExposureUsd = 40000;
+  s.quotes.MSFT = { price: 494.8, at: now() };
+  assert.equal(
+    orderGuard(
+      s,
+      proposal({ action: "buy", symbol: "MSFT", qty: 3, limitPrice: 494.8 }),
+    ),
+    null,
+  );
+  assert.equal(
+    orderGuard(
+      s,
+      proposal({ action: "buy", symbol: "MSFT", qty: 4, limitPrice: 494.8 }),
+    ),
+    "Límite de exposición",
+  );
+  const r = riskContext(s);
+  assert.deepEqual(r.buyRoomUsd, { NVDA: 175, MSFT: 1513, AAPL: 1513 });
+  assert.equal(r.maxPositionsPerGroup, 2);
+  assert.deepEqual(
+    r.groups.find((g) => g.name === groupOf("AAPL")),
+    { name: groupOf("AAPL"), symbols: ["MSFT", "AAPL"], held: ["AAPL"] },
+  );
+  assert.equal(riskContext(state("balanced")).maxPositionsPerGroup, null);
+  // Sin cuenta todavía no hay hueco, y no rompe el contexto.
+  const vacia = state("aggressive");
+  vacia.account = null as any;
+  assert.equal(buyRoomUsd(vacia, "AAPL"), 0);
 });

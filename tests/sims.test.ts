@@ -491,14 +491,18 @@ test("An internal order goes from the decision to its review without leaving Mer
   );
   assert.equal(s.account.cash, 100000 - 1990);
   assert.equal(s.positions[0].qty, 10);
-  assert.match(s.queue[0].reason, /^Orden ejecutada: /);
-  assert.equal(s.queue[0].trigger, "other");
+  assert.equal(
+    s.queue.length,
+    0,
+    "una compra ejecutada no despierta al agente",
+  );
   assert.match(orderNotice(s, real, real.status)!.text, /Orden ejecutada/);
 
-  // 4. La orden ejecutada despierta al agente.
+  // 4. La siguiente revisión periódica lo despierta.
   const t4 = t3 + s.settings.cooldownSeconds * 1000 + 2000;
+  enqueue(s, "Revisión periódica del mercado", "periodic");
   const job2 = claimJob(s, true, t4)!;
-  assert.match(job2.event!, /Orden ejecutada/);
+  assert.match(job2.event!, /Revisión periódica/);
   applyDecision(
     s,
     job2,

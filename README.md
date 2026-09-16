@@ -51,7 +51,7 @@ El agente puede dejarse vigilancias: «si el precio llega a X, vuelve a analizar
 flowchart TD
   A[Datos de mercado IEX] --> B[Vigilancias persistentes]
   B -->|Condición cumplida| C[Cola de eventos]
-  D[Orden ejecutada, revisión periódica o petición manual] --> C
+  D[Venta ejecutada, revisión periódica o petición manual] --> C
   C --> E[Agente con memoria versionada]
   E --> F[Esperar y crear vigilancias]
   F --> B

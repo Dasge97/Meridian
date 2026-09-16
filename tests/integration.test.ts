@@ -714,16 +714,23 @@ test(
         [199, "resting", 10],
       );
       assert.equal(interna.account.cash, 100000 - 1990);
-      assert.match(interna.queue[0].reason, /^Orden ejecutada: /);
+      assert.equal(
+        interna.queue.length,
+        0,
+        "una compra ejecutada no despierta al agente",
+      );
       const aviso = enviados.find((t) => t.includes("Orden ejecutada"));
       assert.ok(aviso, "llega el aviso de la orden ejecutada");
       assert.ok(aviso!.startsWith("<b>[Interna · Agresivo]</b>\n"), aviso);
-      // La orden ejecutada despierta al agente, que ahora espera.
+      // La siguiente revisión periódica lo despierta, y ahora espera.
+      await changeSim("internal", (s) => {
+        enqueue(s, "Revisión periódica del mercado", "periodic");
+      });
       respuesta = "wait";
       reloj += 61000;
       assert.equal(await w.modelStep("internal"), true);
       interna = await readSim("internal");
-      assert.match(interna.decisions.at(-1)!.event, /Orden ejecutada/);
+      assert.match(interna.decisions.at(-1)!.event, /Revisión periódica/);
       // Pasado su plazo, la compra se revisa.
       reloj += 3600000;
       assert.equal(await w.modelStep("internal"), true);

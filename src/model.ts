@@ -5,6 +5,11 @@ import {
   knownIntent,
   SIZING_SHARE,
   EXIT_ATR,
+  MAX_POSITIONS_PER_GROUP,
+  buyRoomUsd,
+  groupOf,
+  heldSymbols,
+  limitsGroups,
   type State,
   type Decision,
   type UsageSection,
@@ -187,6 +192,18 @@ export function riskContext(s: State, t = Date.now()) {
     exitAtrMultiple: EXIT_ATR[r.exit],
     ordersSentToday: enviadas,
     ordersLeftToday: Math.max(0, s.settings.maxDailyOrders - enviadas),
+    // El 16/09/2026 el agente escribió «38.5k de 40k de exposición» y aun así
+    // propuso 4.950 USD, y la orden se bloqueó. Con la cuenta hecha no tiene que
+    // restar.
+    buyRoomUsd: Object.fromEntries(
+      s.settings.symbols.map((x) => [x, buyRoomUsd(s, x)]),
+    ),
+    groups: [...new Set(s.settings.symbols.map(groupOf))].map((name) => ({
+      name,
+      symbols: s.settings.symbols.filter((x) => groupOf(x) === name),
+      held: heldSymbols(s).filter((x) => groupOf(x) === name),
+    })),
+    maxPositionsPerGroup: limitsGroups(r.key) ? MAX_POSITIONS_PER_GROUP : null,
     allFallingNothingToReduce: allFallingNothingToReduce(s, t),
   };
 }
@@ -379,9 +396,10 @@ const veces = (x: number) =>
 const MOTIVOS_PARA_ESPERAR =
   "Solo puedes devolver wait si se cumple uno de estos motivos, y reason tiene que empezar por «Motivo N:» con su número. " +
   "(1) Sin precios recientes: ningún activo con el que operarías tiene en quotes un precio de hace menos de 90 segundos. " +
-  "(2) Límites alcanzados: risk.ordersLeftToday es 0; o el efectivo libre, maxPositionUsd o maxExposureUsd no dejan ni 1 acción en ningún activo candidato y no tienes posiciones que reducir; o todos los candidatos tienen ya una orden abierta; o una decisión tuya sigue en pending, submitting o unknown, porque hasta resolverla no se admite otra orden. " +
+  "(2) Límites alcanzados: risk.ordersLeftToday es 0; o risk.buyRoomUsd no deja ni 1 acción en ningún activo candidato y no tienes posiciones que reducir; o todos los candidatos tienen ya una orden abierta; o una decisión tuya sigue en pending, submitting o unknown, porque hasta resolverla no se admite otra orden. " +
   "(3) Bolsa cerrada o a punto de cerrar: clock.open es false, o clock.minutesToClose es menor que 15. " +
   "(4) Todo cae y no hay nada que reducir: para cada activo de settings.symbols, intraday trae la sesión de hoy (date igual a clock.todayNewYork), last está por debajo de vwap y change60mPct es menor que 0; y en positions no tienes acciones de ninguno de esos activos. Si a un activo le falta alguno de esos datos, no se cumple. Ya viene comprobado en risk.allFallingNothingToReduce: este motivo solo vale si es true. " +
+  "(5) Nada cumple las condiciones de tu nivel: ningún activo cumple a la vez las condiciones de entrada que pone este bloque, el hueco de risk.buyRoomUsd y el tope de risk.maxPositionsPerGroup; y ninguna posición cumple las condiciones para venderla que pone este bloque. En reason di, con cifras, qué falla en los tres mejores candidatos. " +
   "Ningún otro motivo vale. Que el mercado caiga solo es motivo si se cumple el (4) entero. No son motivos: que el mercado esté flojo, lateral o sin dirección clara; que haya un dato macro, una reunión de la Reserva Federal o resultados hoy o mañana; que falte confirmación; que ya tengas una posición abierta; que la operación anterior saliera mal; ni querer ver cómo evoluciona.";
 // Bloque de instrucciones del nivel de riesgo. Va después de las instrucciones
 // de la versión activa, sin tocarlas: las versiones guardadas siguen siendo las
@@ -412,11 +430,15 @@ export function riskInstructions(s: State) {
     );
   if (r.key === "aggressive")
     partes.push(
-      "Busca varias operaciones por sesión, hasta agotar risk.ordersLeftToday si hay ideas: en cada evaluación propón al menos una operación, con symbol, qty y limitPrice. Acepta entradas con confirmación parcial: basta con que la sesión de hoy (intraday) o las velas diarias apunten al alza; no hace falta que coincidan las dos ni que el volumen acompañe. Prioriza que el capital trabaje: con efectivo libre y margen de exposición, úsalo antes que dejarlo quieto. Si la tendencia es bajista (por ejemplo, precio por debajo del vwap y cayendo en los últimos 30 o 60 minutos, o por debajo de su media de 20 sesiones con la variación a 5 sesiones negativa), reduce o cierra lo que tengas antes de abrir nada nuevo, y no compres a contracorriente un activo que cae si no tienes un motivo concreto con cifras. Si todos los activos caen y no te queda nada que reducir, mira el motivo 4. " +
+      "Busca varias operaciones por sesión, hasta agotar risk.ordersLeftToday si hay ideas: en cada evaluación propón al menos una operación, con symbol, qty y limitPrice. " +
+        "Para abrir o ampliar una posición, la sesión de hoy tiene que ir a favor: en intraday, date es clock.todayNewYork y last está por encima de vwap. Las velas diarias a favor no bastan solas; que el volumen acompañe no hace falta. " +
+        "Reparte el riesgo: risk.groups dice qué activos suelen moverse juntos y cuáles ya tienes de cada grupo. No abras una posición nueva en un grupo donde ya tienes risk.maxPositionsPerGroup, porque el sistema la bloquea; ampliar una que ya tienes sí vale. " +
+        "Prioriza que el capital trabaje: si risk.buyRoomUsd deja comprar, úsalo antes que dejarlo quieto. Si en tu mejor idea risk.buyRoomUsd no llega a la mitad de risk.orderTargetUsd, puedes vender la posición más floja para hacer sitio: una que esté por debajo de su precio de entrada y hoy por debajo de vwap. No vendas para hacer sitio una posición comprada hace menos de 30 minutos (míralo en recentDecisions) ni para comprar otra del mismo grupo. " +
+        "Si la tendencia es bajista (por ejemplo, precio por debajo del vwap y cayendo en los últimos 30 o 60 minutos, o por debajo de su media de 20 sesiones con la variación a 5 sesiones negativa), reduce o cierra lo que tengas antes de abrir nada nuevo, y no compres a contracorriente un activo que cae si no tienes un motivo concreto con cifras. Si todos los activos caen y no te queda nada que reducir, mira el motivo 4. " +
         MOTIVOS_PARA_ESPERAR,
     );
   partes.push(
-    `Tamaño: una operación que abre o amplía una posición ronda el ${Math.round(SIZING_SHARE[r.sizing] * 100)} % de maxOrderUsd, unos ${usd} USD (risk.orderTargetUsd). qty es esa cantidad dividida por el precio, redondeada hacia abajo, y al menos 1. Nunca por encima de maxOrderUsd. Si no cabe en maxPositionUsd, maxExposureUsd o el efectivo, baja qty hasta que quepa. Para reducir o cerrar usa la cantidad que corresponda de tu posición, sin mirar este tamaño.`,
+    `Tamaño: una operación que abre o amplía una posición ronda el ${Math.round(SIZING_SHARE[r.sizing] * 100)} % de maxOrderUsd, unos ${usd} USD (risk.orderTargetUsd). qty es esa cantidad dividida por el precio, redondeada hacia abajo, y al menos 1. Nunca por encima de maxOrderUsd. risk.buyRoomUsd dice, por activo, lo máximo que puedes gastar ahora sin pasar maxPositionUsd, maxExposureUsd ni el efectivo: qty por limitPrice no puede superarlo. Si el tamaño no cabe, baja qty hasta que quepa; si no cabe ni 1 acción, esa compra no es posible. Para reducir o cerrar usa la cantidad que corresponda de tu posición, sin mirar este tamaño.`,
     `Salidas: al abrir o ampliar, deja dos vigilancias a una distancia de ${distancia} el movimiento diario habitual (indicators.atr14 del activo) desde el precio de entrada: una para el beneficio con gte por encima y otra para la pérdida con lte por debajo.`,
     "No puedes vender en corto: sell solo con acciones que ya tienes, y como mucho las que tienes.",
   );

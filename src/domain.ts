@@ -7,6 +7,10 @@ import {
   DEFAULT_RISK_PROFILE,
   orderIntent,
   opensRisk,
+  riskProfileOf,
+  groupOf,
+  limitsGroups,
+  MAX_POSITIONS_PER_GROUP,
   type OrderIntent,
 } from "./risk.ts";
 export * from "./risk.ts";
@@ -511,6 +515,65 @@ export function proposalIntent(
 }
 // asset solo lo pasa quien acaba de consultar /v2/assets. Sin él no se mira si
 // el activo se puede negociar.
+export const openOrders = (s: Pick<State, "orders">) =>
+  s.orders.filter(
+    (o) =>
+      !["filled", "canceled", "expired", "rejected", "replaced"].includes(
+        o.status,
+      ),
+  );
+// El dinero de las compras abiertas ya está comprometido aunque aún no se haya
+// gastado. Una venta abierta reduce la exposición y no cuenta. Las órdenes de
+// Alpaca siempre traen qty positiva y el lado aparte.
+export const committedBuyUsd = (s: Pick<State, "orders" | "quotes">) =>
+  openOrders(s)
+    .filter((o) => o.side === "buy")
+    .reduce(
+      (a, o) =>
+        a +
+        (Number(o.qty) - Number(o.filled_qty ?? 0)) *
+          Number(o.limit_price ?? s.quotes[o.symbol]?.price),
+      0,
+    );
+// Activos que se tienen o tienen una compra abierta.
+export const heldSymbols = (s: Pick<State, "positions" | "orders">) => [
+  ...new Set([
+    ...s.positions
+      .filter((x) => Number(x.qty) > 0)
+      .map((x) => String(x.symbol)),
+    ...openOrders(s)
+      .filter((o) => o.side === "buy")
+      .map((o) => String(o.symbol)),
+  ]),
+];
+// Otros activos del grupo de symbol que ya se tienen o tienen una compra abierta.
+export const groupSymbols = (
+  s: Pick<State, "positions" | "orders">,
+  symbol: string,
+) =>
+  heldSymbols(s).filter((x) => x !== symbol && groupOf(x) === groupOf(symbol));
+// Lo máximo que se puede gastar ahora en una compra de symbol sin que la
+// bloqueen maxOrderUsd, maxPositionUsd, maxExposureUsd, el efectivo o una orden
+// abierta del mismo activo. Mismas cuentas que orderGuard; el precio límite
+// cuenta, no el último.
+export function buyRoomUsd(s: State, symbol: string) {
+  if (openOrders(s).some((o) => o.symbol === symbol)) return 0;
+  const committed = committedBuyUsd(s);
+  const invested = s.positions.reduce(
+    (a, x) => a + Math.abs(Number(x.market_value)),
+    0,
+  );
+  const held = Number(
+    s.positions.find((x) => x.symbol === symbol)?.market_value ?? 0,
+  );
+  const room = Math.min(
+    s.settings.maxOrderUsd,
+    s.settings.maxPositionUsd - held,
+    s.settings.maxExposureUsd - invested - committed,
+    Number(s.account?.cash) - committed,
+  );
+  return Number.isFinite(room) ? Math.max(0, Math.floor(room)) : 0;
+}
 export function orderGuard(
   s: State,
   p: z.infer<typeof proposalSchema>,
@@ -565,29 +628,13 @@ export function orderGuard(
   const value = p.qty * p.limitPrice;
   if (!Number.isFinite(value) || value > s.settings.maxOrderUsd)
     return "Límite por orden";
-  const open = s.orders.filter(
-    (o) =>
-      !["filled", "canceled", "expired", "rejected", "replaced"].includes(
-        o.status,
-      ),
-  );
+  const open = openOrders(s);
   // Puede haber varias órdenes abiertas, pero nunca dos del mismo activo. Antes
   // una sola orden limitada sin ejecutar bloqueaba todas las demás el resto del
   // día.
   if (open.some((o) => o.symbol === p.symbol))
     return "Ya hay una orden abierta de este activo";
-  // El dinero de las compras abiertas ya está comprometido aunque aún no se
-  // haya gastado. Una venta abierta reduce la exposición y no cuenta. Las órdenes
-  // de Alpaca siempre traen qty positiva y el lado aparte.
-  const committed = open
-    .filter((o) => o.side === "buy")
-    .reduce(
-      (a, o) =>
-        a +
-        (Number(o.qty) - Number(o.filled_qty ?? 0)) *
-          Number(o.limit_price ?? s.quotes[o.symbol]?.price),
-      0,
-    );
+  const committed = committedBuyUsd(s);
   if (!Number.isFinite(committed)) return "Datos de órdenes no válidos";
   if (
     s.decisions.some((d) =>
@@ -614,6 +661,12 @@ export function orderGuard(
   // Reducir o cerrar no se frena por los límites de dinero ni por el umbral de
   // pérdida: es lo que baja el riesgo.
   if (!opensRisk(intent)) return null;
+  if (
+    intent === "open_long" &&
+    limitsGroups(riskProfileOf(s.settings).key) &&
+    groupSymbols(s, p.symbol).length >= MAX_POSITIONS_PER_GROUP
+  )
+    return "Demasiadas posiciones del mismo grupo";
   if (
     s.baseline &&
     Number(s.account.equity) <

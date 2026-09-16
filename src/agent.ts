@@ -127,8 +127,11 @@ export function sampleEquity(
   )
     s.equity.push({ at: iso(t), value });
 }
-// La decisión sigue a su orden, y una orden ejecutada despierta al agente. Vale
-// para las órdenes de Alpaca y para las de la simulación interna.
+// La decisión sigue a su orden, y una venta ejecutada despierta al agente porque
+// libera dinero. Una compra ejecutada no: sus vigilancias ya quedaron puestas al
+// decidirla. El 16/09/2026 despertar con cada compra hizo que el nivel Agresivo
+// comprara una vez cada 2 minutos, frenado solo por cooldownSeconds. Vale para
+// las órdenes de Alpaca y para las de la simulación interna.
 export function reconcileDecisions(s: State, orders: any[]) {
   for (const d of s.decisions) {
     const o = orders.find((o) => o.client_order_id === d.id);
@@ -136,7 +139,7 @@ export function reconcileDecisions(s: State, orders: any[]) {
       d.status = o.status;
       d.orderId = o.id;
       log(s, "order", `${d.proposal.symbol}: ${o.status}`);
-      if (o.status === "filled")
+      if (o.status === "filled" && d.proposal.action === "sell")
         enqueue(s, `Orden ejecutada: ${d.id}`, "other");
     }
   }

@@ -42,9 +42,42 @@ export const RISK_PROFILES = {
     sizing: "max",
     exit: "wide",
     description:
-      "Mira el mercado cada 10 minutos, busca varias operaciones al día y usa todo lo que permiten los límites. Cuando el mercado cae, reduce o cierra lo que tiene antes de abrir nada nuevo.",
+      "Mira el mercado cada 10 minutos, busca varias operaciones al día y usa lo que permiten los límites, sin más de 2 posiciones del mismo grupo de activos. Solo compra lo que hoy va por encima de su precio medio del día. Cuando el mercado cae, reduce o cierra lo que tiene antes de abrir nada nuevo.",
   },
 } as const;
+// Activos que suelen moverse juntos. El 16/09/2026, en su primera sesión, el
+// nivel Agresivo compró NVDA, AMD, AAPL, META, GOOGL y TSLA en 12 minutos
+// creyendo que repartía el riesgo: si cae la tecnología, caen las seis. Un
+// activo que no está aquí forma su propio grupo.
+export const SYMBOL_GROUPS: Record<string, string> = {
+  NVDA: "Semiconductores",
+  AMD: "Semiconductores",
+  AVGO: "Semiconductores",
+  AAPL: "Grandes tecnológicas",
+  MSFT: "Grandes tecnológicas",
+  GOOGL: "Grandes tecnológicas",
+  META: "Grandes tecnológicas",
+  AMZN: "Grandes tecnológicas",
+  NFLX: "Grandes tecnológicas",
+  TSLA: "Grandes tecnológicas",
+  XLK: "Grandes tecnológicas",
+  QQQ: "Grandes tecnológicas",
+  SPY: "Índices amplios",
+  DIA: "Índices amplios",
+  IWM: "Índices amplios",
+  XLF: "Financieras",
+  JPM: "Financieras",
+  XLE: "Energía",
+  GLD: "Oro",
+  TLT: "Bonos del Tesoro",
+};
+export const groupOf = (symbol: string) =>
+  Object.hasOwn(SYMBOL_GROUPS, symbol) ? SYMBOL_GROUPS[symbol] : symbol;
+// Posiciones distintas del mismo grupo que pueden tener los niveles que empujan
+// a operar (activo y agresivo). Ampliar una que ya se tiene no cuenta.
+export const MAX_POSITIONS_PER_GROUP = 2;
+export const limitsGroups = (profile: RiskProfile) =>
+  profile === "active" || profile === "aggressive";
 export type RiskProfile = keyof typeof RISK_PROFILES;
 export const RISK_PROFILE_KEYS = Object.keys(RISK_PROFILES) as [
   RiskProfile,

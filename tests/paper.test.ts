@@ -108,8 +108,21 @@ test("A buy executable on arrival fills at the last price", () => {
   assert.equal(s.fills[0].cashAfter, 98000);
   assert.equal(d.status, "filled");
   assert.equal(d.orderId, order.id);
-  assert.match(s.queue[0].reason, /Orden ejecutada/);
+  assert.equal(
+    s.queue.length,
+    0,
+    "una compra ejecutada no despierta al agente",
+  );
   assert.ok(s.events.some((e) => e.message === "AAPL: filled"));
+});
+
+test("A filled sell wakes the agent, because it frees cash", () => {
+  const s = internal();
+  place(s, "buy", 10, 201, T0);
+  const venta = place(s, "sell", 10, 199, T0 + 1000);
+  assert.equal(venta.order.status, "filled");
+  assert.equal(s.queue.length, 1);
+  assert.match(s.queue[0].reason, new RegExp(`Orden ejecutada: ${venta.d.id}`));
 });
 
 test("A resting buy fills later at its limit, not at the price seen", () => {
@@ -366,15 +379,14 @@ test("orderGuard accepts a buy on a new internal account", () => {
   );
 });
 
-test("Cancelling open orders updates their decisions and fills queue an evaluation", () => {
+test("Cancelling open orders updates their decisions and does not wake the agent", () => {
   const s = internal();
   const ejecutada = place(s, "buy", 1, 201, T0);
   const abierta = place(s, "buy", 1, 150, T0, "AAPL");
   tick(s, "MSFT", 495, T0);
   const otra = place(s, "sell", 1, 490, T0, "MSFT");
   const espera = place(s, "buy", 1, 400, T0, "MSFT");
-  assert.equal(s.queue.length, 1);
-  assert.match(s.queue[0].reason, new RegExp(ejecutada.d.id));
+  assert.equal(s.queue.length, 0);
   assert.equal(cancelOpenInternal(s, T0 + 1000), 2);
   assert.equal(abierta.order.status, "canceled");
   assert.equal(abierta.order.canceled_at, iso(T0 + 1000));
@@ -383,7 +395,7 @@ test("Cancelling open orders updates their decisions and fills queue an evaluati
   assert.equal(otra.d.status, "rejected", "sin acciones no llegó a esperar");
   assert.equal(ejecutada.d.status, "filled", "lo ejecutado no se toca");
   assert.ok(s.events.some((e) => e.message === "AAPL: canceled"));
-  assert.equal(s.queue.length, 1, "cancelar no despierta al agente");
+  assert.equal(s.queue.length, 0, "cancelar no despierta al agente");
   assert.equal(cancelOpenInternal(s, T0 + 2000), 0);
 });
 

@@ -361,10 +361,16 @@ test("A review stores its text and adopts its lessons in a new version", () => {
   assert.deepEqual(s.versions.at(-1)!.lessonIds, [s.lessons[0].id]);
   assert.equal(s.modelJob, null);
 });
-test("A filled order queues a new evaluation and sets the first baseline", () => {
+test("A filled sell queues a new evaluation and sets the first baseline", () => {
   const s = state();
   s.baseline = null;
-  s.decisions = [decision(s, { id: "order-1", status: "new" })];
+  s.decisions = [
+    decision(s, {
+      id: "order-1",
+      status: "new",
+      proposal: proposal({ action: "sell" }),
+    }),
+  ];
   onShared(s, (sh) =>
     applyMarketSnapshot(sh, {
       // Más reciente que el precio de state(): uno igual o anterior no entra.
@@ -383,6 +389,17 @@ test("A filled order queues a new evaluation and sets the first baseline", () =>
   assert.equal(s.quotes.AAPL.price, 210);
   assert.equal(s.equity.length, 1);
   assert.match(s.queue[0].reason, /Orden ejecutada/);
+});
+test("A filled buy does not wake the agent", () => {
+  const s = state();
+  s.decisions = [decision(s, { id: "order-1", status: "new" })];
+  applyAccount(s, {
+    account: { equity: "9500", cash: "100", status: "ACTIVE" },
+    positions: [],
+    orders: [{ client_order_id: "order-1", id: "alpaca-1", status: "filled" }],
+  });
+  assert.equal(s.decisions[0].status, "filled");
+  assert.equal(s.queue.length, 0);
 });
 test("While paused no price condition fires", () => {
   const s = state();
@@ -918,7 +935,13 @@ test("Every place that queues an evaluation says what caused it", () => {
   queueNewsBeforeOpen(apertura);
   assert.equal(apertura.queue[0].trigger, "preopen");
   const orden = state();
-  orden.decisions = [decision(orden, { id: "order-1", status: "new" })];
+  orden.decisions = [
+    decision(orden, {
+      id: "order-1",
+      status: "new",
+      proposal: proposal({ action: "sell" }),
+    }),
+  ];
   applyAccount(orden, {
     account: { equity: "9500", cash: "100", status: "ACTIVE" },
     positions: [],
