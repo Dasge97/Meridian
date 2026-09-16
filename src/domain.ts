@@ -555,6 +555,20 @@ export const groupSymbols = (
   symbol: string,
 ) =>
   heldSymbols(s).filter((x) => x !== symbol && groupOf(x) === groupOf(symbol));
+// Grupos con más activos en cartera o con compra abierta de los que permite
+// MAX_POSITIONS_PER_GROUP, con los que sobran.
+export const groupsOverCap = (s: Pick<State, "positions" | "orders">) => {
+  const porGrupo = new Map<string, string[]>();
+  for (const x of heldSymbols(s))
+    porGrupo.set(groupOf(x), [...(porGrupo.get(groupOf(x)) ?? []), x]);
+  return [...porGrupo]
+    .filter(([, held]) => held.length > MAX_POSITIONS_PER_GROUP)
+    .map(([name, held]) => ({
+      name,
+      held,
+      excess: held.length - MAX_POSITIONS_PER_GROUP,
+    }));
+};
 // Lo máximo que se puede gastar ahora en una compra de symbol sin que la
 // bloqueen maxOrderUsd, maxPositionUsd, maxExposureUsd, el efectivo o una orden
 // abierta del mismo activo. Mismas cuentas que orderGuard; el precio límite
@@ -678,12 +692,17 @@ export function orderGuard(
   // Reducir o cerrar no se frena por los límites de dinero ni por el umbral de
   // pérdida: es lo que baja el riesgo.
   if (!opensRisk(intent)) return null;
-  // Abrir una tercera del grupo, o ampliar una de un grupo que ya pasa del tope.
-  if (
-    limitsGroups(riskProfileOf(s.settings).key) &&
-    groupSymbols(s, p.symbol).length >= MAX_POSITIONS_PER_GROUP
-  )
-    return "Demasiadas posiciones del mismo grupo";
+  if (limitsGroups(riskProfileOf(s.settings).key)) {
+    // Abrir una tercera del grupo, o ampliar una de un grupo que ya pasa del tope.
+    if (groupSymbols(s, p.symbol).length >= MAX_POSITIONS_PER_GROUP)
+      return "Demasiadas posiciones del mismo grupo";
+    // Mientras algún grupo pase del tope no se compra nada, tampoco de otro
+    // grupo: el 16/09/2026, con la instrucción de vender primero, el agente
+    // compró JPM y dejó 5 grandes tecnológicas y 3 semiconductores.
+    const sobran = groupsOverCap(s);
+    if (sobran.length)
+      return `Antes de comprar hay que vender: ${sobran.map((g) => `${g.name} tiene ${g.held.length}`).join(", ")} y el tope es ${MAX_POSITIONS_PER_GROUP}`;
+  }
   if (
     s.baseline &&
     Number(s.account.equity) <

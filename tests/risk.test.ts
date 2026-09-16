@@ -174,10 +174,7 @@ test("Each level adds its own concrete block of instructions", () => {
     );
     assert.doesNotMatch(texto(level), /al menos 1./);
   }
-  assert.match(
-    texto("aggressive"),
-    /Si un grupo tiene más de risk.maxPositionsPerGroup/,
-  );
+  assert.match(texto("aggressive"), /Si risk.groupsOverCap no está vacío/);
   assert.match(
     texto("active"),
     /\(5\) Nada cumple las condiciones de tu nivel/,
@@ -782,9 +779,25 @@ test("A group already over the cap cannot grow, but can be sold down", () => {
     "Demasiadas posiciones del mismo grupo",
   );
   assert.equal(orderGuard(s, op("sell", "GOOGL")), null);
+  // Tampoco deja comprar de otro grupo mientras sobre alguna.
+  s.settings.symbols.push("JPM");
+  s.quotes.JPM = { price: 200, at: now() };
+  assert.equal(
+    orderGuard(s, op("buy", "JPM")),
+    "Antes de comprar hay que vender: Grandes tecnológicas tiene 3 y el tope es 2",
+  );
+  assert.deepEqual(riskContext(s).groupsOverCap, [
+    {
+      name: "Grandes tecnológicas",
+      held: ["AAPL", "META", "GOOGL"],
+      excess: 1,
+    },
+  ]);
   // Con dos ya se puede volver a ampliar.
   s.positions.pop();
   assert.equal(orderGuard(s, op("buy", "AAPL")), null);
+  assert.equal(orderGuard(s, op("buy", "JPM")), null);
+  assert.deepEqual(riskContext(s).groupsOverCap, []);
   const b = state("balanced");
   Object.assign(b, {
     positions: s.positions.concat({

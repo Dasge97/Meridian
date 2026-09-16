@@ -9,6 +9,7 @@ import {
   buyRoomUsd,
   groupOf,
   heldSymbols,
+  groupsOverCap,
   limitsGroups,
   type State,
   type Decision,
@@ -204,6 +205,7 @@ export function riskContext(s: State, t = Date.now()) {
       held: heldSymbols(s).filter((x) => groupOf(x) === name),
     })),
     maxPositionsPerGroup: limitsGroups(r.key) ? MAX_POSITIONS_PER_GROUP : null,
+    groupsOverCap: limitsGroups(r.key) ? groupsOverCap(s) : [],
     allFallingNothingToReduce: allFallingNothingToReduce(s, t),
   };
 }
@@ -432,7 +434,7 @@ export function riskInstructions(s: State) {
     partes.push(
       "Busca varias operaciones por sesión, hasta agotar risk.ordersLeftToday si hay ideas: en cada evaluación propón al menos una operación, con symbol, qty y limitPrice. " +
         "Para abrir o ampliar una posición, la sesión de hoy tiene que ir a favor: en intraday, date es clock.todayNewYork y last está por encima de vwap. Las velas diarias a favor no bastan solas; que el volumen acompañe no hace falta. " +
-        "Reparte el riesgo: risk.groups dice qué activos suelen moverse juntos y cuáles ya tienes de cada grupo. No abras una posición nueva en un grupo donde ya tienes risk.maxPositionsPerGroup, porque el sistema la bloquea; ampliar una que ya tienes sí vale. Si un grupo tiene más de risk.maxPositionsPerGroup, el sistema tampoco deja ampliar ninguna de sus posiciones: antes de comprar nada, vende entera la más floja de ese grupo (la que más pierde desde su entrada o, si ninguna pierde, la que más por debajo de vwap está hoy), una por evaluación, hasta dejarlo en risk.maxPositionsPerGroup. Para estas ventas no hace falta esperar 30 minutos desde la compra. " +
+        "Reparte el riesgo: risk.groups dice qué activos suelen moverse juntos y cuáles ya tienes de cada grupo. No abras una posición nueva en un grupo donde ya tienes risk.maxPositionsPerGroup, porque el sistema la bloquea; ampliar una que ya tienes sí vale. Si risk.groupsOverCap no está vacío, el sistema bloquea cualquier compra, de ese grupo o de otro, hasta que no sobre ninguna: tu operación es vender entera la más floja de uno de esos grupos (la que más pierde desde su entrada o, si ninguna pierde, la que más por debajo de vwap está hoy), una por evaluación, hasta dejarlo en risk.maxPositionsPerGroup. Para estas ventas no hace falta esperar 30 minutos desde la compra. " +
         "Prioriza que el capital trabaje: si risk.buyRoomUsd deja comprar, úsalo antes que dejarlo quieto. Si en tu mejor idea risk.buyRoomUsd no llega a la mitad de risk.orderTargetUsd, puedes vender la posición más floja para hacer sitio: una que esté por debajo de su precio de entrada y hoy por debajo de vwap. No vendas para hacer sitio una posición comprada hace menos de 30 minutos (míralo en recentDecisions) ni para comprar otra del mismo grupo. " +
         "Si la tendencia es bajista (por ejemplo, precio por debajo del vwap y cayendo en los últimos 30 o 60 minutos, o por debajo de su media de 20 sesiones con la variación a 5 sesiones negativa), reduce o cierra lo que tengas antes de abrir nada nuevo, y no compres a contracorriente un activo que cae si no tienes un motivo concreto con cifras. Si todos los activos caen y no te queda nada que reducir, mira el motivo 4. " +
         MOTIVOS_PARA_ESPERAR,
