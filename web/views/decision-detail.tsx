@@ -18,7 +18,7 @@ import {
   amount,
   needsReconcile,
 } from "./decisions-parts";
-import { decisionType, intentOf, shortNote } from "./decisions-intent";
+import { decisionType } from "./decisions-intent";
 import "./decisions.css";
 
 function Context({
@@ -85,16 +85,16 @@ export function DecisionDetail(p: {
   s: Data;
   busy: boolean;
   act: Act;
+  api: (path: string) => string;
   selected: Decision;
   setSelected: (d: Decision | null) => void;
   detail: { id: string; input: unknown } | null;
 }) {
-  const { s, busy, act, setSelected, detail } = p;
+  const { s, busy, act, api, setSelected, detail } = p;
   // El estado se refresca cada 5 s: se enseña la versión más reciente.
   const d = s.decisions.find((x) => x.id === p.selected.id) ?? p.selected;
   const pr = d.proposal,
     type = decisionType(d),
-    intent = intentOf(d),
     total = amount(d),
     fromEntry =
       d.review?.price && pr.limitPrice
@@ -121,7 +121,9 @@ export function DecisionDetail(p: {
       }
     >
       <div className="dc-detail">
-        {needsReconcile(d) && (
+        {/* Solo las órdenes que salen a Alpaca se reconcilian: la interna nunca
+            deja una orden incierta. */}
+        {needsReconcile(d) && s.broker === "alpaca" && (
           <div className="dc-callout" role="status">
             <TriangleAlert size={18} aria-hidden="true" />
             <div>
@@ -136,7 +138,7 @@ export function DecisionDetail(p: {
                   className="primary"
                   disabled={busy}
                   onClick={async () => {
-                    if (await act(`/orders/${d.id}/reconcile`))
+                    if (await act(api(`/orders/${d.id}/reconcile`)))
                       setSelected(null);
                   }}
                 >
@@ -160,7 +162,7 @@ export function DecisionDetail(p: {
                     action="Verificar y resolver"
                     danger
                     onConfirm={async () => {
-                      if (await act(`/orders/${d.id}/confirm-absent`))
+                      if (await act(api(`/orders/${d.id}/confirm-absent`)))
                         setSelected(null);
                     }}
                   >
@@ -173,12 +175,6 @@ export function DecisionDetail(p: {
               </div>
             </div>
           </div>
-        )}
-
-        {intent && shortNote[intent] && (
-          <p className="dc-short-note">
-            <b>Posición corta.</b> {shortNote[intent]}
-          </p>
         )}
 
         {d.error && (

@@ -2,7 +2,8 @@
 // ni salida: recibe el estado y devuelve texto, o null si no hay nada que contar.
 import { escapeHtml } from "./telegram.ts";
 import type { State, Decision } from "./domain.ts";
-import { tradeName, type OrderIntent } from "./risk.ts";
+import { tradeName } from "./risk.ts";
+import { SIM_IDS, isSimId, type SimId } from "./sims.ts";
 export type Notice = { kind: string; text: string };
 // Una decisión de seguir esperando no se cuenta cada vez, aunque el agente lo
 // pida: sin este freno el bot repetiría lo mismo varias veces por hora.
@@ -21,16 +22,9 @@ const titulo: Record<string, string> = {
   sell: "🔴 VENTA",
   wait: "⚪ Sin operar",
 };
-// Con cortos no basta con comprar y vender: una venta puede abrir un corto y una
-// compra, recomprarlo. La intención se calcula al decidir; una decisión anterior
-// a ese campo se nombra por su acción, como antes.
-const tituloIntencion: Partial<Record<OrderIntent, string>> = {
-  open_short: "🔻 VENTA EN CORTO",
-  add_short: "🔻 VENTA EN CORTO",
-  reduce_short: "🔺 RECOMPRA",
-  close_short: "🔺 RECOMPRA",
-};
-const nombre = (d: Decision) => tradeName(d.intent, d.proposal.action);
+// Los avisos nombran la operación por su acción. Así una decisión guardada con
+// una intención que ya no existe, como open_short, se sigue leyendo como venta.
+const nombre = (d: Decision) => tradeName(d.proposal.action);
 const estados: Record<string, string> = {
   filled: "ejecutada",
   partially_filled: "ejecutada en parte",
@@ -95,9 +89,9 @@ export function decisionNotice(
   }
   const cabecera = bloqueada
     ? `🚫 NO SE ENVIÓ · ${escapeHtml(p.symbol ?? "")}`
-    : `${(d.intent && tituloIntencion[d.intent]) ?? titulo[p.action] ?? p.action}${p.symbol ? ` · ${escapeHtml(p.symbol)}` : ""}`;
+    : `${titulo[p.action] ?? p.action}${p.symbol ? ` · ${escapeHtml(p.symbol)}` : ""}`;
   // Un precio límite es el máximo que se paga al comprar y el mínimo que se
-  // acepta al vender, también en corto.
+  // acepta al vender.
   const cuanto =
     opera && p.qty && p.limitPrice
       ? `\n${p.qty} ${p.qty === 1 ? "acción" : "acciones"} a ${money(p.limitPrice)} como ${p.action === "buy" ? "máximo" : "mínimo"}`
@@ -127,19 +121,19 @@ export function orderNotice(
   const p = d.proposal;
   const icono =
     estado === "filled" ? "✅" : estado === "rejected" ? "⛔" : "↩️";
+  // Una orden de la simulación interna no llega a Alpaca: la rechaza el motor.
+  const texto =
+    estado === "rejected" && s.broker !== "alpaca"
+      ? "rechazada"
+      : (estados[estado] ?? escapeHtml(estado));
   const pos = s.positions.find((x) => x.symbol === p.symbol);
-  // En Alpaca una posición corta tiene qty y valor negativos. «Tienes -10» no se
-  // entiende: se dice cuántas se deben.
-  const corta = pos && Number(pos.qty) < 0;
   const cartera = !pos
     ? ""
-    : corta
-      ? `\n\nAhora debes ${Math.abs(Number(pos.qty))} de ${escapeHtml(p.symbol ?? "")} (posición corta), valen ${money(Math.abs(Number(pos.market_value)))} (${money(pos.unrealized_pl)} sin realizar).`
-      : `\n\nAhora tienes ${pos.qty} de ${escapeHtml(p.symbol ?? "")}, valen ${money(pos.market_value)} (${money(pos.unrealized_pl)} sin realizar).`;
+    : `\n\nAhora tienes ${pos.qty} de ${escapeHtml(p.symbol ?? "")}, valen ${money(pos.market_value)} (${money(pos.unrealized_pl)} sin realizar).`;
   return {
     kind: "orden",
     text:
-      `<b>${icono} Orden ${estados[estado] ?? escapeHtml(estado)} · ${escapeHtml(p.symbol ?? "")}</b>\n` +
+      `<b>${icono} Orden ${texto} · ${escapeHtml(p.symbol ?? "")}</b>\n` +
       `${nombre(d)} de ${p.qty} a ${money(p.limitPrice)}` +
       cartera +
       `\n\nEfectivo: ${money(s.account?.cash)} · Patrimonio: ${money(s.account?.equity)}`,
@@ -200,5 +194,39 @@ export function newsNotice(s: State, d: Decision): Notice | null {
   return {
     kind: "noticias",
     text: `<b>${encabezado}</b>\n\n${bloques.join("\n\n")}`,
+  };
+}
+
+// Con dos simulaciones, cada aviso dice de cuál es y con qué nivel, delante de
+// todo: «[Interna · Agresivo]». Los de lo compartido no pasan por aquí.
+export function withSim(
+  notice: Notice | null,
+  sim: { label: string; riskLabel: string },
+): Notice | null {
+  if (!notice) return null;
+  return {
+    kind: notice.kind,
+    text:
+      `<b>[${escapeHtml(sim.label)} · ${escapeHtml(sim.riskLabel)}]</b>\n` +
+      notice.text,
+  };
+}
+// Qué simulaciones mandan sus comentarios de noticias por Telegram. Las dos
+// comentan las mismas noticias, así que por defecto llegan dos mensajes; con
+// TELEGRAM_NEWS_SIMS=internal solo llegan los de la interna. Sin valor, o sin
+// ningún id válido, todas. Los nombres que no existen se devuelven aparte para
+// avisar al arrancar.
+export function newsSims(value: string | undefined): {
+  sims: SimId[];
+  unknown: string[];
+} {
+  const nombres = (value ?? "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const sims = SIM_IDS.filter((x) => nombres.includes(x));
+  return {
+    sims: sims.length ? sims : [...SIM_IDS],
+    unknown: nombres.filter((x) => !isSimId(x)),
   };
 }

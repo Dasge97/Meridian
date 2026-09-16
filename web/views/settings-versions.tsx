@@ -62,7 +62,7 @@ function VersionItem(p: { x: Version; view: ViewProps; n: number }) {
               </>
             }
             action="Recuperar versión"
-            onConfirm={() => act(`/versions/${x.id}/activate`)}
+            onConfirm={() => act(p.view.api(`/versions/${x.id}/activate`))}
           >
             <button type="button" className="st-restore" disabled={busy}>
               <RotateCcw size={14} aria-hidden /> Recuperar

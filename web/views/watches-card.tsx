@@ -146,7 +146,7 @@ export function ActiveWatch(p: { w: Watch; view: ViewProps }) {
           }
           action="Cancelar vigilancia"
           danger
-          onConfirm={() => act(`/watches/${w.id}/cancel`)}
+          onConfirm={() => act(view.api(`/watches/${w.id}/cancel`))}
         >
           <button type="button" className="danger wt-cancel" disabled={busy}>
             <X size={14} aria-hidden /> Cancelar

@@ -34,7 +34,7 @@ const TABS: [Lesson["status"] | "all", string][] = [
 // Las revisiones guardan como fuente el identificador de la decisión: no dice
 // nada a quien lo lee.
 const isId = (text: string) => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(text.trim());
-// Mismo nombre que en Decisiones: con cortos, «Venta en corto» o «Recompra».
+// Mismo nombre que en Decisiones.
 function decisionLabel(d: ViewProps["s"]["decisions"][number]) {
   return `${decisionType(d).text} · ${d.proposal.symbol ?? "mercado"} · ${date(d.at)}`;
 }
@@ -126,7 +126,7 @@ function LessonCard({ l, p }: { l: Lesson; p: ViewProps }) {
             action="Descartar lección"
             danger
             onConfirm={() =>
-              act(`/lessons/${l.id}/status`, { status: "rejected" })
+              act(p.api(`/lessons/${l.id}/status`), { status: "rejected" })
             }
           >
             <button type="button" className="danger" disabled={busy}>
@@ -140,7 +140,7 @@ function LessonCard({ l, p }: { l: Lesson; p: ViewProps }) {
             className="primary"
             disabled={busy}
             onClick={() =>
-              act(`/lessons/${l.id}/status`, { status: "accepted" })
+              act(p.api(`/lessons/${l.id}/status`), { status: "accepted" })
             }
           >
             Activar en nueva versión
@@ -175,7 +175,7 @@ function AddLesson(
         className="ln-form"
         onSubmit={async (e) => {
           e.preventDefault();
-          if (await p.act("/lessons", { title, body, source })) {
+          if (await p.act(p.api("/lessons"), { title, body, source })) {
             setTitle("");
             setBody("");
             setSource("");

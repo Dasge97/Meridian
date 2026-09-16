@@ -78,7 +78,7 @@ function Kpis({ s, goTo }: { s: Data; goTo: (tab: string) => void }) {
       <div className="sm-kpi">
         <span className="sm-kpi-label">
           Exposición
-          <Hint label="Suma del valor de las posiciones abiertas frente al límite de exposición. Las cortas cuentan en positivo. Las compras pendientes también cuentan para el límite y no están aquí.">
+          <Hint label="Suma del valor de las posiciones abiertas frente al límite de exposición. Las compras pendientes también cuentan para el límite y no están aquí.">
             <button
               type="button"
               className="sm-info"
@@ -312,13 +312,10 @@ function Positions({ s }: { s: Data }) {
       (a, b) =>
         Math.abs(Number(b.market_value)) - Math.abs(Number(a.market_value)),
     ),
-    // Alpaca da los cortos con unidades y valor negativos.
-    isShort = (x: (typeof rows)[number]) =>
-      x.side === "short" || Number(x.qty) < 0,
     parts = [
       ...rows.map((x, i) => ({
         key: x.symbol as string,
-        label: (x.symbol as string) + (isShort(x) ? " corto" : ""),
+        label: x.symbol as string,
         value: Math.abs(Number(x.market_value) || 0),
         cls: "sm-seg-" + (i % 6),
       })),
@@ -367,8 +364,11 @@ function Positions({ s }: { s: Data }) {
       )}
       {!rows.length ? (
         <Empty>
-          No hay posiciones. Aquí aparecerán las compras ejecutadas en Alpaca
-          Paper.
+          No hay posiciones. Aquí aparecerán las compras ejecutadas{" "}
+          {s.broker === "alpaca"
+            ? "en Alpaca Paper"
+            : "en la simulación Interna"}
+          .
         </Empty>
       ) : (
         <div className="table-wrap">
@@ -386,18 +386,14 @@ function Positions({ s }: { s: Data }) {
             </thead>
             <tbody>
               {rows.map((x) => {
-                const pl = Number(x.unrealized_pl),
-                  short = isShort(x);
+                const pl = Number(x.unrealized_pl);
                 return (
                   <tr key={x.symbol}>
                     <th scope="row">
-                      <span className="sm-asset">
-                        <span className="symbol-tag">{x.symbol}</span>
-                        {short && <span className="badge sm-short">Corto</span>}
-                      </span>
+                      <span className="symbol-tag">{x.symbol}</span>
                     </th>
                     <td data-label="Unidades" className="num">
-                      {short ? Math.abs(Number(x.qty)) : x.qty}
+                      {x.qty}
                     </td>
                     <td data-label="Precio de entrada" className="num">
                       {money(x.avg_entry_price)}
@@ -406,7 +402,7 @@ function Positions({ s }: { s: Data }) {
                       {money(x.current_price)}
                     </td>
                     <td data-label="Valor" className="num">
-                      {money(Math.abs(Number(x.market_value)))}
+                      {money(x.market_value)}
                     </td>
                     <td data-label="Peso" className="num">
                       {share(Math.abs(Number(x.market_value)), equity)}
@@ -431,7 +427,7 @@ function Positions({ s }: { s: Data }) {
   );
 }
 
-function Activity({ s }: { s: Data }) {
+function Activity({ s, api }: { s: Data; api: (path: string) => string }) {
   const [open, setOpen] = useState(false),
     events = s.events.slice(0, 8),
     total = s.totals?.events ?? s.events.length;
@@ -464,7 +460,12 @@ function Activity({ s }: { s: Data }) {
           </button>
         )}
       </div>
-      <EventLog open={open} onOpenChange={setOpen} latestId={s.events[0]?.id} />
+      <EventLog
+        open={open}
+        onOpenChange={setOpen}
+        latestId={s.events[0]?.id}
+        api={api}
+      />
     </section>
   );
 }
@@ -563,7 +564,7 @@ export function Summary(p: ViewProps) {
       </div>
       <Positions s={s} />
       <div className="sm-bottom">
-        <Activity s={s} />
+        <Activity s={s} api={p.api} />
         <Usage s={s} goTo={p.goTo} />
       </div>
     </div>

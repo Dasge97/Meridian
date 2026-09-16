@@ -419,14 +419,9 @@ export function DailyChart(p: {
   }, [events, palette, narrow]);
 
   const entry = position ? Number(position.avg_entry_price) : null;
-  // Alpaca da los cortos con unidades negativas.
-  const short = Boolean(
-    position && (position.side === "short" || Number(position.qty) < 0),
-  );
   const linesKey = JSON.stringify([
     watches.map((w) => [w.operator, w.price]),
     entry,
-    short,
   ]);
   useEffect(() => {
     const x = series.current;
@@ -620,7 +615,7 @@ export function DailyChart(p: {
             {position && (
               <span>
                 <i className="mk-key entry" aria-hidden="true" />
-                {short ? "Precio de entrada del corto" : "Precio de entrada"}
+                Precio de entrada
               </span>
             )}
             <span>▲ compra · ▼ venta · ● vigilancia cerrada</span>

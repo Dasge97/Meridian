@@ -4,14 +4,14 @@
 //
 // El 16/09/2026 el agente llevaba 1 orden en 54 decisiones. Las instrucciones le
 // dejaban esperar si lo justificaba, las noticias lo despertaban cada 30 minutos
-// para repasar la misma posición y no podía vender en corto con el mercado
-// bajando. Cada nivel cambia esas tres cosas a la vez, para poder comparar.
+// para repasar la misma posición y, con el mercado bajando, solo esperaba. Cada
+// nivel cambia a la vez cada cuánto mira el mercado, si las noticias lo
+// despiertan y cuánto arriesga, para poder comparar. Ningún nivel vende en corto.
 export const RISK_PROFILES = {
   prudent: {
     label: "Prudente",
     scanEveryMinutes: 30,
     newsWakesAgent: true,
-    shorts: false,
     sizing: "small",
     exit: "tight",
     description:
@@ -21,7 +21,6 @@ export const RISK_PROFILES = {
     label: "Equilibrado",
     scanEveryMinutes: 20,
     newsWakesAgent: true,
-    shorts: false,
     sizing: "medium",
     exit: "medium",
     description:
@@ -31,7 +30,6 @@ export const RISK_PROFILES = {
     label: "Activo",
     scanEveryMinutes: 15,
     newsWakesAgent: false,
-    shorts: false,
     sizing: "large",
     exit: "wide",
     description:
@@ -41,11 +39,10 @@ export const RISK_PROFILES = {
     label: "Agresivo",
     scanEveryMinutes: 10,
     newsWakesAgent: false,
-    shorts: true,
     sizing: "max",
     exit: "wide",
     description:
-      "Mira el mercado cada 10 minutos, busca varias operaciones al día, usa todo lo que permiten los límites y apuesta a la baja (venta en corto) cuando el mercado cae.",
+      "Mira el mercado cada 10 minutos, busca varias operaciones al día y usa todo lo que permiten los límites. Cuando el mercado cae, reduce o cierra lo que tiene antes de abrir nada nuevo.",
   },
 } as const;
 export type RiskProfile = keyof typeof RISK_PROFILES;
@@ -77,74 +74,45 @@ export function riskProfileOf(settings: { riskProfile?: string } | undefined) {
       : DEFAULT_RISK_PROFILE;
   return { key: profile, ...RISK_PROFILES[profile] };
 }
-// Qué significa una orden según la posición que hay en ese momento. En Alpaca
-// una posición corta tiene qty negativa.
+// Qué significa una orden según la posición que hay en ese momento. Solo hay
+// posiciones largas: no se vende lo que no se tiene.
 export type OrderIntent =
-  | "open_long"
-  | "add_long"
-  | "reduce_long"
-  | "close_long"
-  | "open_short"
-  | "add_short"
-  | "reduce_short"
-  | "close_short";
+  "open_long" | "add_long" | "reduce_long" | "close_long";
 // Las mismas etiquetas que usa el panel.
 export const INTENT_LABELS: Record<OrderIntent, string> = {
   open_long: "Compra",
   add_long: "Amplía compra",
   reduce_long: "Venta parcial",
   close_long: "Venta",
-  open_short: "Venta en corto",
-  add_short: "Amplía corto",
-  reduce_short: "Reduce corto",
-  close_short: "Recompra",
 };
-// Nombre corto de la operación para los avisos: compra, venta, venta en corto o
-// recompra. Una decisión anterior a la intención se nombra por su acción.
-export function tradeName(
-  intent: OrderIntent | undefined,
+// Una decisión guardada cuando había ventas en corto puede traer open_short,
+// reduce_short y parecidos. Esas intenciones ya no existen: se tratan como si no
+// hubiera intención y la orden se nombra por su acción, como venta o compra.
+export const knownIntent = (intent: unknown): OrderIntent | undefined =>
+  typeof intent === "string" && Object.hasOwn(INTENT_LABELS, intent)
+    ? (intent as OrderIntent)
+    : undefined;
+// Nombre de la operación para los avisos.
+export const tradeName = (action: "buy" | "sell" | "wait") =>
+  action === "buy" ? "Compra" : "Venta";
+// Etiqueta de la intención, o el nombre por la acción si no se conoce.
+export const intentLabel = (
+  intent: unknown,
   action: "buy" | "sell" | "wait",
-) {
-  if (intent === "open_short" || intent === "add_short")
-    return "Venta en corto";
-  if (intent === "reduce_short" || intent === "close_short") return "Recompra";
-  return action === "buy" ? "Compra" : "Venta";
-}
-// Devuelve la intención, o el cruce que no se permite: pasar de largo a corto
-// (o al revés) en una sola orden.
+) => {
+  const known = knownIntent(intent);
+  return known ? INTENT_LABELS[known] : tradeName(action);
+};
+// Devuelve la intención, o exceeds_position si la venta pide más acciones de
+// las que hay: eso abriría una posición corta, y no se permite.
 export function orderIntent(
   heldQty: number,
   action: "buy" | "sell",
   qty: number,
-): OrderIntent | "long_to_short" | "short_to_long" {
-  if (action === "buy") {
-    if (heldQty < 0) {
-      const debe = -heldQty;
-      return qty < debe
-        ? "reduce_short"
-        : qty === debe
-          ? "close_short"
-          : "short_to_long";
-    }
-    return heldQty === 0 ? "open_long" : "add_long";
-  }
-  if (heldQty > 0)
-    return qty < heldQty
-      ? "reduce_long"
-      : qty === heldQty
-        ? "close_long"
-        : "long_to_short";
-  return heldQty === 0 ? "open_short" : "add_short";
+): OrderIntent | "exceeds_position" {
+  if (action === "buy") return heldQty === 0 ? "open_long" : "add_long";
+  if (heldQty <= 0 || qty > heldQty) return "exceeds_position";
+  return qty < heldQty ? "reduce_long" : "close_long";
 }
 export const opensRisk = (i: OrderIntent) =>
-  i === "open_long" ||
-  i === "add_long" ||
-  i === "open_short" ||
-  i === "add_short";
-// Dos intenciones significan lo mismo si van en el mismo lado y en la misma
-// dirección. Abrir o ampliar da igual; reducir o cerrar también.
-export function sameMeaning(a: OrderIntent, b: OrderIntent) {
-  const grupo = (i: OrderIntent) =>
-    `${i.endsWith("long") ? "long" : "short"}:${opensRisk(i) ? "up" : "down"}`;
-  return grupo(a) === grupo(b);
-}
+  i === "open_long" || i === "add_long";

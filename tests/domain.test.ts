@@ -10,6 +10,7 @@ import {
   watchProblem,
   adoptLessons,
   MAX_ACTIVE_LESSONS,
+  RISK_PROFILE_KEYS,
   now,
   id,
 } from "../src/domain.ts";
@@ -56,7 +57,15 @@ test("A valid paper buy passes and insufficient cash fails", () => {
 });
 test("No shorts, leverage, invalid data or stale quotes", () => {
   const s = state();
-  assert.match(orderGuard(s, { ...proposal(), action: "sell" })!, /cortas/);
+  // En ningún nivel de riesgo se vende lo que no se tiene.
+  for (const level of RISK_PROFILE_KEYS) {
+    s.settings.riskProfile = level;
+    assert.equal(
+      orderGuard(s, { ...proposal(), action: "sell" }),
+      "No se permiten posiciones cortas",
+      level,
+    );
+  }
   s.account.equity = "broken";
   assert.match(orderGuard(s, proposal())!, /Datos/);
   s.account.equity = "10000";

@@ -43,7 +43,9 @@ const kinds: Record<string, { label: string; Icon: LucideIcon }> = {
 export const eventKind = (type: string) =>
   kinds[type] ?? { label: type, Icon: CircleDot };
 
-// Con "clock" solo la hora, para listas ya agrupadas por día.
+// Con "clock" solo la hora, para listas ya agrupadas por día. Un evento de lo
+// compartido (precios, calendario, análisis, noticias, límites) sale igual en
+// las dos simulaciones, y se marca para que no parezca propio de la elegida.
 export function EventItem(p: { e: LabEvent; time?: "auto" | "clock" }) {
   const { e } = p,
     k = eventKind(e.type),
@@ -54,7 +56,17 @@ export function EventItem(p: { e: LabEvent; time?: "auto" | "clock" }) {
         <k.Icon size={14} />
       </span>
       <div>
-        <span className="sm-type">{k.label}</span>
+        <span className="sm-type">
+          {k.label}
+          {e.scope === "shared" && (
+            <span
+              className="sm-scope"
+              title="Vale para las dos simulaciones: sale igual en las dos."
+            >
+              Compartido
+            </span>
+          )}
+        </span>
         <p>{e.message}</p>
       </div>
       <time className="num" dateTime={e.at} title={date(e.at)}>

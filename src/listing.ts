@@ -1,7 +1,11 @@
 // Filtrado y paginación de decisiones y eventos para el panel. No hace entrada
 // ni salida: recibe el historial y los parámetros ya validados, así que se
 // prueba directamente.
-import { UserError, type Decision, type State } from "./domain.ts";
+import {
+  UserError,
+  type Decision,
+  type Event as StoredEvent,
+} from "./domain.ts";
 
 export const PAGE_SIZE = 25,
   PAGE_SIZE_MAX = 100;
@@ -14,7 +18,10 @@ export const DECISION_KINDS = [
   "unresolved",
 ] as const;
 export type DecisionKind = (typeof DECISION_KINDS)[number];
-type Event = State["events"][number];
+// Los eventos de una simulación llevan scope "sim" y los compartidos "shared",
+// para que el panel sepa cuáles valen para todas.
+export type EventScope = "sim" | "shared";
+export type Event = StoredEvent & { scope?: EventScope };
 
 export type Page<T> = { items: T[]; total: number; page: number; size: number };
 export type DecisionPage = Page<Decision> & {
@@ -109,6 +116,16 @@ export function listDecisions(
   };
 }
 
+// Los eventos de una simulación junto a los compartidos, lo más reciente primero.
+export const mergeEvents = (
+  own: StoredEvent[],
+  shared: StoredEvent[],
+): Event[] =>
+  newestFirst<Event>([
+    ...own.map((e) => ({ ...e, scope: "sim" as const })),
+    ...shared.map((e) => ({ ...e, scope: "shared" as const })),
+  ]);
+
 export function listEvents(events: Event[], f: EventFilter): EventPage {
   const q = fold(f.q);
   const base = newestFirst(
@@ -201,6 +218,11 @@ export function decisionFilter(query: unknown): DecisionFilter {
       "El activo tiene que ser un símbolo de 1 a 5 letras mayúsculas",
     );
   return { ...c, kind: kind as DecisionKind, symbol };
+}
+// GET /api/compare solo admite from: el periodo termina siempre ahora.
+export function compareFrom(query: unknown): number | null {
+  const raw = (query && typeof query === "object" ? query : {}) as Raw;
+  return instant(raw, "from", "La fecha de inicio");
 }
 export function eventFilter(query: unknown): EventFilter {
   const { raw, ...c } = common(query);

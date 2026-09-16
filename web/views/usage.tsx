@@ -320,7 +320,7 @@ export function Usage(p: ViewProps) {
     const t = setTimeout(
       () => {
         setLoading(true);
-        fetch("/api/usage?" + params, { signal: ctrl.signal })
+        fetch("/api" + p.api("/usage?" + params), { signal: ctrl.signal })
           .then(async (r) => {
             const body = await r.json().catch(() => null);
             if (!r.ok)
@@ -520,6 +520,7 @@ export function Usage(p: ViewProps) {
         onClose={() => setOpen(null)}
         s={s}
         openDecision={p.openDecision}
+        api={p.api}
       />
     </div>
   );

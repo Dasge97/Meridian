@@ -222,7 +222,7 @@ export function NewWatch(p: {
       return;
     }
     const expiresAt = new Date(d.expires).toISOString();
-    const ok = await act("/watches", {
+    const ok = await act(p.view.api("/watches"), {
       symbol: d.symbol,
       operator: d.operator,
       price: Number(d.price),

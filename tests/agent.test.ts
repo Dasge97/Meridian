@@ -4,20 +4,24 @@ import {
   initialState,
   proposalSchema,
   limitPriceString,
-  prune,
+  pruneSim,
   pruneEquity,
   now,
   id,
   type State,
 } from "../src/domain.ts";
 import {
-  applyMarket,
-  applySnapshot,
+  applyQuotes,
+  applyWatches,
+  applyMarketSnapshot,
+  applyAccount,
+  mergeNews,
+  queueNews,
+  recordAlpacaFills,
   claimIntent,
   claimJob,
   applyDecision,
   applyReview,
-  applyNews,
   queueNewsBeforeOpen,
   failJob,
   queueSessionScan,
@@ -25,6 +29,36 @@ import {
   SCAN_REASON,
   type Job,
 } from "../src/agent.ts";
+import {
+  composeState,
+  decomposeState,
+  type SharedState,
+} from "../src/sim-state.ts";
+const later = () => new Date(Date.now() + 1000).toISOString();
+// Aplica una transición compartida sobre la vista, como hacen en el worker
+// changeShared y después changeSim.
+function onShared<T>(s: State, fn: (sh: SharedState) => T): T {
+  const { shared, sim } = decomposeState(s);
+  const result = fn(shared);
+  Object.assign(s, composeState(shared, sim));
+  return result;
+}
+// Llegan precios y cada simulación mira sus vigilancias.
+function market(
+  s: State,
+  quotes: State["quotes"],
+  connected = true,
+  lastTick = Date.now(),
+) {
+  onShared(s, (sh) => applyQuotes(sh, quotes, connected, lastTick));
+  applyWatches(s);
+}
+// Se guardan las noticias en lo compartido y la simulación decide si despierta.
+const news = (s: State, raw: unknown[]) =>
+  queueNews(
+    s,
+    onShared(s, (sh) => mergeNews(sh, raw)),
+  );
 function state(): State {
   const s = initialState();
   s.paused = false;
@@ -331,12 +365,17 @@ test("A filled order queues a new evaluation and sets the first baseline", () =>
   const s = state();
   s.baseline = null;
   s.decisions = [decision(s, { id: "order-1", status: "new" })];
-  applySnapshot(s, {
+  onShared(s, (sh) =>
+    applyMarketSnapshot(sh, {
+      // Más reciente que el precio de state(): uno igual o anterior no entra.
+      trades: { trades: { AAPL: { p: 210, t: later() } } },
+      clock: { is_open: true },
+    }),
+  );
+  applyAccount(s, {
     account: { equity: "9500", cash: "100", status: "ACTIVE" },
     positions: [],
     orders: [{ client_order_id: "order-1", id: "alpaca-1", status: "filled" }],
-    trades: { trades: { AAPL: { p: 210, t: now() } } },
-    clock: { is_open: true },
   });
   assert.equal(s.baseline, 9500);
   assert.equal(s.decisions[0].status, "filled");
@@ -362,11 +401,11 @@ test("While paused no price condition fires", () => {
     },
   ];
   s.paused = true;
-  applyMarket(s, { AAPL: { price: 100, at: now() } }, true, Date.now());
+  market(s, { AAPL: { price: 100, at: now() } });
   assert.equal(s.watches[0].status, "active");
   assert.equal(s.queue.length, 0);
   s.paused = false;
-  applyMarket(s, { AAPL: { price: 100, at: now() } }, true, Date.now());
+  market(s, { AAPL: { price: 100, at: now() } });
   assert.equal(s.watches[0].status, "triggered");
   assert.equal(s.queue.length, 1);
 });
@@ -387,7 +426,7 @@ test("A price condition only fires during the regular session", () => {
     },
   ];
   // Operación de antes de la apertura: no debe gastar la vigilancia.
-  applyMarket(s, { AAPL: { price: 100, at: now() } }, true, Date.now());
+  market(s, { AAPL: { price: 100, at: now() } });
   assert.equal(s.watches[0].status, "active");
   assert.equal(s.queue.length, 0);
   s.market = {
@@ -395,7 +434,7 @@ test("A price condition only fires during the regular session", () => {
     nextOpen: null,
     nextClose: new Date(Date.now() - 1000).toISOString(),
   };
-  applyMarket(s, { AAPL: { price: 100, at: now() } }, true, Date.now());
+  market(s, { AAPL: { price: 100, at: now() } });
   assert.equal(
     s.watches[0].status,
     "active",
@@ -404,16 +443,16 @@ test("A price condition only fires during the regular session", () => {
 });
 test("With the market closed news is saved but does not wake the agent", () => {
   const s = closed(state(), 600);
-  assert.equal(applyNews(s, [rawStory("1")]), 1);
+  assert.equal(news(s, [rawStory("1")]), 1);
   assert.equal(s.stories.length, 1);
   assert.equal(s.queue.length, 0);
   assert.match(s.events[0].message, /antes de la apertura/);
   const abierta = state();
-  applyNews(abierta, [rawStory("2")]);
+  news(abierta, [rawStory("2")]);
   assert.equal(abierta.queue.length, 1, "con la bolsa abierta sí despierta");
   const sinCalendario = closed(state(), 600);
   sinCalendario.feeds.clock = false;
-  applyNews(sinCalendario, [rawStory("3")]);
+  news(sinCalendario, [rawStory("3")]);
   assert.equal(
     sinCalendario.queue.length,
     1,
@@ -422,7 +461,7 @@ test("With the market closed news is saved but does not wake the agent", () => {
 });
 test("Pending news is reviewed once, in the half hour before the opening", () => {
   const s = closed(state(), 600);
-  applyNews(s, [rawStory("1"), rawStory("2")]);
+  news(s, [rawStory("1"), rawStory("2")]);
   assert.equal(queueNewsBeforeOpen(s), false, "faltan diez horas");
   closed(s, 20);
   s.market.nextClose = new Date(Date.now() + 410 * 60000).toISOString();
@@ -440,7 +479,7 @@ test("Pending news is reviewed once, in the half hour before the opening", () =>
 });
 test("If the worker missed the half hour, pending news is reviewed at the opening", () => {
   const s = closed(state(), 600);
-  applyNews(s, [rawStory("1")]);
+  news(s, [rawStory("1")]);
   s.market = {
     open: true,
     nextOpen: null,
@@ -450,11 +489,11 @@ test("If the worker missed the half hour, pending news is reviewed at the openin
 });
 test("The stream is reported as disconnected after two minutes without trades", () => {
   const s = state();
-  applyMarket(s, {}, true, Date.now());
+  market(s, {});
   assert.equal(s.stream, "connected");
-  applyMarket(s, {}, true, Date.now() - 200000);
+  market(s, {}, true, Date.now() - 200000);
   assert.equal(s.stream, "disconnected");
-  applyMarket(s, {}, false, Date.now());
+  market(s, {}, false);
   assert.equal(s.stream, "disconnected");
 });
 test("Equity keeps recent samples in full and one per hour before that", () => {
@@ -488,7 +527,7 @@ test("Pruning bounds history and drops the saved context of old decisions", () =
     type: "t",
     message: "m",
   }));
-  prune(s);
+  pruneSim(s);
   assert.equal(s.decisions.length, 2000);
   assert.equal(s.events.length, 1000);
   assert.equal(s.decisions[0].input, null);
@@ -527,57 +566,151 @@ test("Pruning never drops accepted lessons or active watches", () => {
     ...Array.from({ length: 600 }, () => watch("expired")),
     watch("active", "vigilando"),
   ];
-  prune(s);
+  pruneSim(s);
   assert.ok(s.lessons.some((l) => l.id === "kept"));
   assert.equal(s.lessons.filter((l) => l.status === "rejected").length, 500);
   assert.ok(s.watches.some((w) => w.id === "vigilando"));
   assert.equal(s.watches.filter((w) => w.status !== "active").length, 500);
 });
-test("A missing price or calendar feed still syncs the account and warns once", () => {
-  const s = state();
-  applySnapshot(s, {
-    account: { equity: "9000", cash: "9000", status: "ACTIVE" },
-    positions: [],
-    orders: [],
-    trades: null,
-    clock: null,
-  });
-  assert.equal(s.account.equity, "9000", "la cuenta se sincroniza igual");
-  assert.equal(s.feeds.trades, false);
-  assert.equal(s.feeds.clock, false);
-  assert.equal(s.events.length, 2, "un aviso por cada origen de datos caído");
-  applySnapshot(s, {
-    account: { equity: "9000", cash: "9000", status: "ACTIVE" },
-    positions: [],
-    orders: [],
-    trades: null,
-    clock: null,
-  });
+test("A missing price or calendar feed warns once, in the shared events", () => {
+  const sh = decomposeState(state()).shared;
+  applyMarketSnapshot(sh, { trades: null, clock: null });
+  assert.equal(sh.feeds.trades, false);
+  assert.equal(sh.feeds.clock, false);
   assert.equal(
-    s.events.length,
+    sh.systemEvents.length,
+    2,
+    "un aviso por cada origen de datos caído",
+  );
+  applyMarketSnapshot(sh, { trades: null, clock: null });
+  assert.equal(
+    sh.systemEvents.length,
     2,
     "no se repite el aviso en cada sincronización",
   );
-  applySnapshot(s, {
+  applyMarketSnapshot(sh, {
+    trades: { trades: { AAPL: { p: 205, t: later() } } },
+    clock: { is_open: true },
+  });
+  assert.equal(sh.feeds.trades, true);
+  assert.equal(sh.feeds.clock, true);
+  assert.equal(sh.quotes.AAPL.price, 205);
+  assert.equal(
+    sh.systemEvents.length,
+    4,
+    "también se avisa de la recuperación",
+  );
+  // La cuenta se sincroniza aparte, aunque falten precios o calendario.
+  const s = state();
+  applyAccount(s, {
     account: { equity: "9000", cash: "9000", status: "ACTIVE" },
     positions: [],
     orders: [],
-    trades: { trades: { AAPL: { p: 205, t: now() } } },
+  });
+  assert.equal(s.account.equity, "9000");
+  assert.equal(s.events.length, 0, "la simulación no recibe esos avisos");
+});
+test("A price from the periodic sync never replaces a newer one", () => {
+  const sh = decomposeState(state()).shared;
+  const reciente = new Date(Date.now() - 1000).toISOString();
+  sh.quotes.AAPL = { price: 201, at: reciente };
+  applyMarketSnapshot(sh, {
+    trades: {
+      trades: {
+        AAPL: { p: 199, t: new Date(Date.now() - 20000).toISOString() },
+        TSLA: { p: 300, t: now() },
+      },
+    },
     clock: { is_open: true },
   });
-  assert.equal(s.feeds.trades, true);
-  assert.equal(s.feeds.clock, true);
-  assert.equal(s.quotes.AAPL.price, 205);
-  assert.equal(s.events.length, 4, "también se avisa de la recuperación");
+  assert.deepEqual(
+    sh.quotes.AAPL,
+    { price: 201, at: reciente },
+    "el precio no retrocede",
+  );
+  assert.equal(sh.quotes.TSLA, undefined, "solo activos de la lista");
+  applyQuotes(sh, { AAPL: { price: 198, at: now() } }, true, Date.now());
+  assert.equal(sh.quotes.AAPL.price, 198, "uno más reciente sí entra");
+  applyQuotes(
+    sh,
+    { AAPL: { price: 150, at: new Date(Date.now() - 60000).toISOString() } },
+    true,
+    Date.now(),
+  );
+  assert.equal(sh.quotes.AAPL.price, 198);
+});
+test("Finished Alpaca orders are recorded as fills once, manual ones marked", () => {
+  const s = state();
+  s.decisions = [decision(s, { id: "order-1", status: "new" })];
+  const orders = [
+    {
+      id: "a2",
+      client_order_id: "otra-cosa",
+      symbol: "MSFT",
+      side: "sell",
+      status: "filled",
+      filled_qty: "2",
+      filled_avg_price: "500.5",
+      filled_at: "2026-09-15T15:00:00Z",
+    },
+    {
+      id: "a1",
+      client_order_id: "order-1",
+      symbol: "AAPL",
+      side: "buy",
+      status: "canceled",
+      filled_qty: "3",
+      filled_avg_price: "200",
+      filled_at: "2026-09-15T14:00:00Z",
+    },
+    { id: "a3", symbol: "AAPL", side: "buy", status: "new", filled_qty: "1" },
+    {
+      id: "a4",
+      symbol: "AAPL",
+      side: "buy",
+      status: "canceled",
+      filled_qty: "0",
+    },
+  ];
+  applyAccount(s, {
+    account: { equity: "9000", cash: "9000", status: "ACTIVE" },
+    positions: [],
+    orders,
+  });
+  assert.deepEqual(s.fills, [
+    {
+      orderId: "a1",
+      decisionId: "order-1",
+      symbol: "AAPL",
+      side: "buy",
+      qty: 3,
+      price: 200,
+      at: "2026-09-15T14:00:00Z",
+      realizedPl: 0,
+      rule: "alpaca",
+    },
+    {
+      orderId: "a2",
+      manual: true,
+      symbol: "MSFT",
+      side: "sell",
+      qty: 2,
+      price: 500.5,
+      at: "2026-09-15T15:00:00Z",
+      realizedPl: 0,
+      rule: "alpaca",
+    },
+  ]);
+  assert.equal(recordAlpacaFills(s, orders), 0, "cada orden una sola vez");
 });
 test("Removing an asset from the list also drops its stale price", () => {
   const s = state();
   s.quotes.MSFT = { price: 495, at: now() };
-  applyMarket(s, {}, true, Date.now());
+  market(s, {});
   assert.ok(s.quotes.MSFT, "mientras está permitido, su precio se conserva");
   // El propietario lo quita de la lista desde Configuración.
   s.settings.symbols = ["SPY", "AAPL"];
-  applyMarket(s, {}, true, Date.now());
+  market(s, {});
   assert.ok(s.quotes.AAPL, "un activo permitido se conserva");
   assert.equal(s.quotes.MSFT, undefined, "un activo retirado no deja precio");
 });
@@ -588,27 +721,20 @@ test("The agent is told whether the market is open and when it reopens", () => {
     "al empezar se asume cerrada",
   );
   const s = state();
-  applySnapshot(s, {
-    account: { equity: "100000", cash: "100000", status: "ACTIVE" },
-    positions: [],
-    orders: [],
-    trades: null,
-    clock: {
-      is_open: true,
-      next_open: "2026-09-14T13:30:00Z",
-      next_close: "2026-09-11T20:00:00Z",
-    },
-  });
+  onShared(s, (sh) =>
+    applyMarketSnapshot(sh, {
+      trades: null,
+      clock: {
+        is_open: true,
+        next_open: "2026-09-14T13:30:00Z",
+        next_close: "2026-09-11T20:00:00Z",
+      },
+    }),
+  );
   assert.equal(s.market.open, true);
   assert.equal(s.market.nextOpen, "2026-09-14T13:30:00Z");
   // Sin calendario se conserva lo último que se supo, en vez de inventarlo.
-  applySnapshot(s, {
-    account: { equity: "100000", cash: "100000", status: "ACTIVE" },
-    positions: [],
-    orders: [],
-    trades: null,
-    clock: null,
-  });
+  onShared(s, (sh) => applyMarketSnapshot(sh, { trades: null, clock: null }));
   assert.equal(s.market.open, true);
 });
 // Consumo del modelo por llamada.
@@ -625,7 +751,7 @@ const sections = {
 test("A decision stores what it spent, what caused it and the size of each part", () => {
   const s = state();
   s.queue = [];
-  applyMarket(s, {}, true, Date.now());
+  market(s, {});
   s.watches = [
     {
       id: "w1",
@@ -640,7 +766,7 @@ test("A decision stores what it spent, what caused it and the size of each part"
       createdAt: now(),
     },
   ];
-  applyMarket(s, { AAPL: { price: 199, at: now() } }, true, Date.now());
+  market(s, { AAPL: { price: 199, at: now() } });
   const trabajo = claimJob(s, true)!;
   const T = Date.parse("2026-09-15T14:00:00Z");
   const d = applyDecision(
@@ -784,21 +910,19 @@ test("Every place that queues an evaluation says what caused it", () => {
   queueSessionScan(periodica, T);
   assert.equal(periodica.queue[0].trigger, "periodic");
   const noticias = state();
-  applyNews(noticias, [rawStory("1")]);
+  news(noticias, [rawStory("1")]);
   assert.equal(noticias.queue[0].trigger, "news");
   const apertura = closed(state(), 600);
-  applyNews(apertura, [rawStory("1")]);
+  news(apertura, [rawStory("1")]);
   closed(apertura, 20);
   queueNewsBeforeOpen(apertura);
   assert.equal(apertura.queue[0].trigger, "preopen");
   const orden = state();
   orden.decisions = [decision(orden, { id: "order-1", status: "new" })];
-  applySnapshot(orden, {
+  applyAccount(orden, {
     account: { equity: "9500", cash: "100", status: "ACTIVE" },
     positions: [],
     orders: [{ client_order_id: "order-1", id: "alpaca-1", status: "filled" }],
-    trades: null,
-    clock: { is_open: true },
   });
   assert.equal(orden.queue[0].trigger, "other");
   // Un evento que ya esperaba en la cola antes de guardar el origen.
@@ -826,6 +950,6 @@ test("Every place that queues an evaluation says what caused it", () => {
 test("Old usage records without detail survive pruning untouched", () => {
   const s = state();
   s.usage = [{ at: now(), tokens: 100 }];
-  prune(s);
+  pruneSim(s);
   assert.deepEqual(s.usage, [{ at: s.usage[0].at, tokens: 100 }]);
 });

@@ -1,10 +1,10 @@
 import { z } from "zod";
 import type { Analysis, Intraday } from "./market.ts";
 import type { Story } from "./news.ts";
+import { SIM_IDS, SIMS, type SimId, type Broker } from "./sims.ts";
 import {
   RISK_PROFILE_KEYS,
   DEFAULT_RISK_PROFILE,
-  riskProfileOf,
   orderIntent,
   opensRisk,
   type OrderIntent,
@@ -92,15 +92,10 @@ export const proposalSchema = z.object({
   lessons: z.array(lessonSchema).max(3).default([]),
 });
 export type Settings = z.infer<typeof settingsSchema>;
-// Los ajustes que envía el panel. Un formulario que no conoce el nivel de riesgo
-// no lo envía, y guardar los límites no debe devolverlo al de por defecto sin
-// que nadie lo pida: si falta, se conserva el actual.
-export function settingsUpdate(current: Settings, body: unknown): Settings {
-  const next = settingsSchema.parse(body);
-  const trae =
-    typeof body === "object" && body !== null && "riskProfile" in body;
-  return trae ? next : { ...next, riskProfile: riskProfileOf(current).key };
-}
+// Los límites son compartidos por todas las simulaciones y el nivel de riesgo es
+// de cada una. PUT /api/settings ignora riskProfile si llega: un formulario de
+// antes lo envía con los límites y no debe cambiar el nivel de nadie.
+export const sharedSettingsSchema = settingsSchema.omit({ riskProfile: true });
 export type Watch = z.infer<typeof watchSchema> & {
   id: string;
   status: "active" | "triggered" | "expired" | "cancelled" | "invalidated";
@@ -140,9 +135,10 @@ export type Decision = {
   reviewSkipped?: string;
   // Comentarios ya emparejados con su noticia, para el panel y para el aviso.
   newsCommented?: { storyId: string; comment: string; matters: boolean }[];
-  // Qué significa la orden con las posiciones de cuando se decidió: compra,
-  // venta, venta en corto o recompra. Solo en compras y ventas que no cruzan de
-  // largo a corto; las decisiones anteriores a este campo no lo traen.
+  // Qué significa la orden con las posiciones de cuando se decidió: abre, amplía,
+  // reduce o cierra. Las decisiones anteriores a este campo no lo traen, y las
+  // de cuando había ventas en corto pueden traer una intención que ya no existe:
+  // quien la lea pasa por knownIntent.
   intent?: OrderIntent;
 };
 export const USAGE_TRIGGERS = [
@@ -187,7 +183,39 @@ export type Usage = {
 };
 export const USAGE_EVENT_CHARS = 200,
   USAGE_ERROR_CHARS = 300;
+export type Event = { id: string; at: string; type: string; message: string };
+// Una ejecución, en la simulación interna o en Alpaca. rule dice qué precio se
+// usó. Las de Alpaca no traen quoteAt ni cashAfter, porque no se calculan aquí, y
+// su realizedPl es 0: el resultado de cada venta lo calcula src/compare.ts
+// reconstruyendo el libro.
+export type Fill = {
+  orderId: string;
+  decisionId?: string;
+  symbol: string;
+  side: "buy" | "sell";
+  qty: number;
+  price: number;
+  at: string;
+  quoteAt?: string;
+  cashAfter?: number;
+  realizedPl: number;
+  rule: "arrival" | "resting" | "alpaca";
+  manual?: boolean;
+};
+export type BookPosition = { symbol: string; qty: number; avgPrice: number };
+// Efectivo y posiciones, sin valorar. Es lo que reconstruye replayFills.
+export type Book = { cash: number; positions: BookPosition[] };
+// Cómo estaba cada cuenta al empezar la comparación. Lleva el efectivo para que
+// replayFills pueda partir de aquí.
+export type ComparisonStart = Book & { startedAt: string; equity: number };
+// La vista de una simulación: lo compartido más lo suyo, con la misma forma que
+// tenía el estado cuando solo había una. src/sim-state.ts dice en qué fila se
+// guarda cada campo y cómo se compone y se descompone la vista.
 export type State = {
+  // Qué simulación es y quién ejecuta sus órdenes. No se guardan: salen de la
+  // clave de sus filas.
+  sim: SimId;
+  broker: Broker;
   paused: boolean;
   settings: Settings;
   versions: Version[];
@@ -195,7 +223,7 @@ export type State = {
   watches: Watch[];
   lessons: Lesson[];
   decisions: Decision[];
-  events: { id: string; at: string; type: string; message: string }[];
+  events: Event[];
   // trigger dice quién encoló el evento, para saber en qué se gastan los tokens.
   queue: {
     id: string;
@@ -217,6 +245,8 @@ export type State = {
   stream: string;
   feeds: { trades: boolean; clock: boolean };
   market: { open: boolean; nextOpen: string | null; nextClose: string | null };
+  // Cuándo se pidió por última vez el calendario a Alpaca.
+  marketSync: string | null;
   analysis: Record<string, Analysis>;
   intraday: Record<string, Intraday>;
   stories: Story[];
@@ -224,12 +254,19 @@ export type State = {
   // Sesión para la que ya se encoló el repaso de noticias pendientes.
   preOpenNews: string | null;
   usage: Usage[];
-  modelJob?: {
+  modelJob: {
     id: string;
     startedAt: string;
     kind: "decision" | "review";
     targetId: string;
   } | null;
+  // Las ejecuciones de la cuenta, para comparar simulaciones. No se recortan:
+  // replayFills parte del punto de comparación y necesita todas las posteriores.
+  fills: Fill[];
+  // El punto de partida de la comparación, o null si aún no hay cuenta.
+  comparison: ComparisonStart | null;
+  // Cuándo empezó la simulación: su primera muestra de patrimonio.
+  startedAt: string;
 };
 export const now = () => new Date().toISOString();
 export const id = () => crypto.randomUUID();
@@ -250,6 +287,8 @@ export function initialState(): State {
     note: "Versión inicial",
   };
   return {
+    sim: SIM_IDS[0],
+    broker: SIMS[SIM_IDS[0]].broker,
     paused: true,
     settings: {
       symbols: ["SPY", "AAPL", "MSFT"],
@@ -282,33 +321,76 @@ export function initialState(): State {
     stream: "disconnected",
     feeds: { trades: true, clock: true },
     market: { open: false, nextOpen: null, nextClose: null },
+    marketSync: null,
     analysis: {},
     intraday: {},
     stories: [],
     lastNotice: null,
     preOpenNews: null,
     usage: [],
+    modelJob: null,
+    fills: [],
+    comparison: null,
+    startedAt: now(),
   };
 }
-// Arma el estado a partir de lo guardado. Un campo que no existía al guardarse
-// aparece con su valor inicial. Los ajustes se completan campo a campo porque son
-// un objeto dentro del estado: sin esto, un estado antiguo se quedaba sin nivel
-// de riesgo.
+// Arma el estado con el formato de antes de separar las simulaciones, el de las
+// filas 1 y 2 de meridian_state. Solo lo usan la migración y su vuelta atrás. Un
+// campo que no existía al guardarse aparece con su valor inicial. Los ajustes se
+// completan campo a campo porque son un objeto dentro del estado: sin esto, un
+// estado antiguo se quedaba sin nivel de riesgo.
 export function restoreState(parts: Record<string, unknown>[]): State {
   const base = initialState();
   const s: State = Object.assign({}, base, ...parts);
   s.settings = { ...base.settings, ...s.settings };
   return s;
 }
-export function log(s: State, type: string, message: string) {
+export const EVENTS_KEPT = 1000,
+  SYSTEM_EVENTS_KEPT = 500;
+// Un evento de la simulación: sus decisiones, órdenes, vigilancias y controles.
+export function log(s: Pick<State, "events">, type: string, message: string) {
   s.events.unshift({ id: id(), at: now(), type, message });
-  s.events = s.events.slice(0, 1000);
+  s.events = s.events.slice(0, EVENTS_KEPT);
+}
+// Un evento de lo compartido: calendario, precios, análisis y límites. El panel
+// lo enseña entre los eventos de cada simulación.
+export function logShared(
+  sh: { systemEvents: Event[] },
+  type: string,
+  message: string,
+) {
+  sh.systemEvents.unshift({ id: id(), at: now(), type, message });
+  sh.systemEvents = sh.systemEvents.slice(0, SYSTEM_EVENTS_KEPT);
+}
+// Efectivo y posiciones de una cuenta con la forma de Alpaca, ordenadas por activo.
+export function bookOf(s: Pick<State, "account" | "positions">): Book {
+  return {
+    cash: Number(s.account?.cash),
+    positions: s.positions
+      .map((x) => ({
+        symbol: String(x.symbol),
+        qty: Number(x.qty),
+        avgPrice: Number(x.avg_entry_price),
+      }))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol)),
+  };
+}
+export function comparisonStart(
+  s: Pick<State, "account" | "positions">,
+  t = Date.now(),
+): ComparisonStart {
+  return {
+    startedAt: new Date(t).toISOString(),
+    equity: Number(s.account?.equity),
+    ...bookOf(s),
+  };
 }
 export function enqueue(s: State, reason: string, trigger: UsageTrigger) {
   if (s.queue.length < 100)
     s.queue.push({ id: id(), reason, at: now(), trigger });
 }
 export const EVENT_ATTEMPTS = 2,
+  REVIEW_ATTEMPTS = 3,
   MAX_ACTIVE_LESSONS = 15;
 // Las lecciones entran solas en la memoria activa, sin esperar al propietario.
 // El tope evita que la memoria crezca sin fin: al pasarlo se retira la más
@@ -405,29 +487,18 @@ export const validWatch = (w: z.infer<typeof watchSchema>, s: State) =>
 export type AssetInfo = {
   tradable?: boolean;
   status?: string;
-  shortable?: boolean;
-  easy_to_borrow?: boolean;
 };
 export function assetProblem(
   asset: AssetInfo | null | undefined,
-  intent: OrderIntent | undefined,
 ): string | null {
   if (!asset?.tradable || asset.status !== "active")
     return "Activo no negociable";
-  // Para vender en corto hay que pedir prestadas las acciones. Alpaca solo lo
-  // permite si el activo es shortable, y sin easy_to_borrow la orden se rechaza
-  // o el préstamo se puede reclamar en cualquier momento.
-  if (
-    (intent === "open_short" || intent === "add_short") &&
-    !(asset.shortable && asset.easy_to_borrow)
-  )
-    return "Alpaca no permite vender este activo en corto ahora";
   return null;
 }
 const heldQty = (s: State, symbol: string | null) =>
   Number(s.positions.find((x) => x.symbol === symbol)?.qty ?? 0);
 // La intención de una compra o venta con las posiciones de ahora. undefined si
-// es una espera, si faltan datos o si cruzaría de largo a corto o al revés.
+// es una espera, si faltan datos o si vende más de lo que se tiene.
 export function proposalIntent(
   s: State,
   p: z.infer<typeof proposalSchema>,
@@ -436,10 +507,10 @@ export function proposalIntent(
   const held = heldQty(s, p.symbol);
   if (!Number.isFinite(held)) return undefined;
   const i = orderIntent(held, p.action, p.qty);
-  return i === "long_to_short" || i === "short_to_long" ? undefined : i;
+  return i === "exceeds_position" ? undefined : i;
 }
 // asset solo lo pasa quien acaba de consultar /v2/assets. Sin él no se mira si
-// el activo se puede negociar ni si admite cortos.
+// el activo se puede negociar.
 export function orderGuard(
   s: State,
   p: z.infer<typeof proposalSchema>,
@@ -505,15 +576,11 @@ export function orderGuard(
   // día.
   if (open.some((o) => o.symbol === p.symbol))
     return "Ya hay una orden abierta de este activo";
-  // El dinero de las órdenes abiertas que aumentan la exposición ya está
-  // comprometido aunque aún no se haya gastado: una compra sin posición corta en
-  // ese activo, o una venta sin posición larga, que abre un corto. Una recompra o
-  // la venta de lo que se tiene reducen la exposición y no cuentan. Las órdenes
+  // El dinero de las compras abiertas ya está comprometido aunque aún no se
+  // haya gastado. Una venta abierta reduce la exposición y no cuenta. Las órdenes
   // de Alpaca siempre traen qty positiva y el lado aparte.
   const committed = open
-    .filter((o) =>
-      o.side === "buy" ? heldQty(s, o.symbol) >= 0 : heldQty(s, o.symbol) <= 0,
-    )
+    .filter((o) => o.side === "buy")
     .reduce(
       (a, o) =>
         a +
@@ -535,31 +602,17 @@ export function orderGuard(
   )
     return "Límite diario de órdenes";
   if (p.action === "wait") return "Una espera no es una orden";
-  const profile = riskProfileOf(s.settings);
   const pos = s.positions.find((x) => x.symbol === p.symbol);
-  const held = Number(pos?.qty ?? 0);
-  const intent = orderIntent(held, p.action, p.qty);
-  // Una sola orden no cruza de largo a corto: si la venta de cierre se ejecuta
-  // a medias, no se sabría qué parte es venta y qué parte es corto. Sin cortos,
-  // vender más de lo que se tiene sigue diciendo lo de siempre.
-  if (intent === "long_to_short")
-    return profile.shorts
-      ? `No se puede pasar de largo a corto en una sola orden: vende primero las ${held} acciones`
-      : "No se permiten posiciones cortas";
-  if (intent === "short_to_long")
-    return `No se puede pasar de corto a largo en una sola orden: recompra primero las ${-held} acciones`;
-  if (intent === "open_short" || intent === "add_short") {
-    if (!profile.shorts) return "No se permiten posiciones cortas";
-    if (s.account.shorting_enabled === false)
-      return "La cuenta de Alpaca no tiene activadas las ventas en corto";
-  }
+  const intent = orderIntent(Number(pos?.qty ?? 0), p.action, p.qty);
+  // Vender más de lo que se tiene abriría una posición corta. No se permite en
+  // ningún nivel de riesgo.
+  if (intent === "exceeds_position") return "No se permiten posiciones cortas";
   if (asset !== undefined) {
-    const problema = assetProblem(asset, intent);
+    const problema = assetProblem(asset);
     if (problema) return problema;
   }
-  // Reducir o cerrar, sea largo o corto, no se frena por los límites de dinero ni
-  // por el umbral de pérdida: es lo que baja el riesgo. Una recompra se permite
-  // también en un nivel sin cortos, para poder deshacer los que quedaran.
+  // Reducir o cerrar no se frena por los límites de dinero ni por el umbral de
+  // pérdida: es lo que baja el riesgo.
   if (!opensRisk(intent)) return null;
   if (
     s.baseline &&
@@ -567,20 +620,8 @@ export function orderGuard(
       s.baseline * (1 - s.settings.maxDrawdownPct / 100)
   )
     return "Umbral de pérdida alcanzado";
-  // Lo cobrado al vender en corto entra en el efectivo, pero se debe: no es
-  // dinero libre. Un corto pide el mismo efectivo libre que una compra del mismo
-  // valor, así que tampoco con cortos se opera con apalancamiento.
-  const owed = s.positions
-    .filter((x) => Number(x.qty) < 0)
-    .reduce((a, x) => a + Math.abs(Number(x.market_value)), 0);
-  if (value + committed > Number(s.account.cash) - owed)
-    return "Saldo insuficiente";
-  // Un corto cuenta igual que un largo del mismo valor: en Alpaca su valor de
-  // mercado es negativo, así que todo se mide en valor absoluto.
-  if (
-    value + Math.abs(Number(pos?.market_value ?? 0)) >
-    s.settings.maxPositionUsd
-  )
+  if (value + committed > Number(s.account.cash)) return "Saldo insuficiente";
+  if (value + Number(pos?.market_value ?? 0) > s.settings.maxPositionUsd)
     return "Límite por posición";
   if (
     s.positions.reduce((a, x) => a + Math.abs(Number(x.market_value)), 0) +
@@ -596,49 +637,6 @@ export class UserError extends Error {}
 // Alpaca accepts 4 decimals below one dollar and 2 at or above it.
 export const limitPriceString = (price: number) =>
   price < 1 ? price.toFixed(4) : price.toFixed(2);
-// Written on every worker iteration; stays small and bounded.
-export const hotKeys = [
-  "paused",
-  "settings",
-  "activeVersion",
-  "watches",
-  "queue",
-  "quotes",
-  "account",
-  "positions",
-  "orders",
-  "heartbeat",
-  "lastSync",
-  "lastDecision",
-  "calls",
-  "baseline",
-  "stream",
-  "feeds",
-  "market",
-  "lastNotice",
-  "preOpenNews",
-  "modelJob",
-] as const;
-// History. Large, and only written when something actually happens.
-export const coldKeys = [
-  "versions",
-  "lessons",
-  "decisions",
-  "events",
-  "equity",
-  "usage",
-  "analysis",
-  "intraday",
-  "stories",
-] as const;
-type Hot = Pick<State, (typeof hotKeys)[number]>;
-type Cold = Pick<State, (typeof coldKeys)[number]>;
-const _exhaustive: Hot & Cold extends State
-  ? State extends Hot & Cold
-    ? true
-    : never
-  : never = true;
-void _exhaustive;
 // USAGE_KEPT: un registro de consumo con su detalle ocupa unos 600 bytes, 900 si
 // trae error. 2.000 son menos de 2 MB, poco al lado del contexto guardado de las
 // decisiones. Con 20 llamadas al día cubren más de tres meses.
@@ -663,9 +661,16 @@ export function pruneEquity(points: State["equity"], t = Date.now()) {
     }
   return [...hourly.slice(-EQUITY_OLD_POINTS), ...recent];
 }
-// Keeps the whole document bounded so every write stays cheap.
-export function prune(s: State, t = Date.now()) {
-  s.events = s.events.slice(0, 1000);
+// Mantiene acotado lo que es de cada simulación, para que cada escritura siga
+// siendo barata. fills no se recorta: ver State.
+export function pruneSim(
+  s: Pick<
+    State,
+    "events" | "usage" | "equity" | "decisions" | "watches" | "lessons"
+  >,
+  t = Date.now(),
+) {
+  s.events = s.events.slice(0, EVENTS_KEPT);
   s.usage = s.usage.slice(-USAGE_KEPT);
   s.equity = pruneEquity(s.equity, t);
   s.decisions = s.decisions.slice(-DECISIONS_KEPT);
@@ -689,4 +694,9 @@ export function prune(s: State, t = Date.now()) {
     );
     s.lessons = s.lessons.filter((l) => !inactive(l) || keep.has(l.id));
   }
+}
+// Lo compartido ya llega acotado: noticias, análisis y velas se recortan al
+// guardarse. Solo crecen los eventos.
+export function pruneShared(sh: { systemEvents: Event[] }) {
+  sh.systemEvents = sh.systemEvents.slice(0, SYSTEM_EVENTS_KEPT);
 }

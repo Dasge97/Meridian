@@ -1,29 +1,34 @@
 import {
   id,
-  now,
   log,
+  logShared,
   enqueue,
   validWatch,
   watchState,
   orderGuard,
   EVENT_ATTEMPTS,
+  REVIEW_ATTEMPTS,
   USAGE_EVENT_CHARS,
   USAGE_ERROR_CHARS,
   adoptLessons,
   proposalIntent,
   riskProfileOf,
-  sameMeaning,
   tradeName,
+  comparisonStart,
   type State,
   type Usage,
   type Decision,
+  type Fill,
   type Quote,
+  type UsageTrigger,
   type proposalSchema,
 } from "./domain.ts";
+import type { SharedState } from "./sim-state.ts";
+import type { SimId } from "./sims.ts";
 import type { z } from "zod";
 import type { Analysis, Intraday } from "./market.ts";
 import type { Spent } from "./model.ts";
-import { mergeStories, summarise, pendingRefs } from "./news.ts";
+import { mergeStories, summarise, pendingRefs, type Story } from "./news.ts";
 import {
   sessionOpen,
   newYorkMinutes,
@@ -39,10 +44,10 @@ export type Job = {
   // El evento tal como estaba en la cola, para devolverlo si la evaluación falla.
   queued?: State["queue"][number];
 };
-export type Snapshot = {
-  account: any;
-  positions: any[];
-  orders: any[];
+// Lo que se pide a Alpaca cada 30 segundos, en dos partes. El calendario y los
+// últimos precios son compartidos; la cuenta, las posiciones y las órdenes son de
+// la simulación de Alpaca. Separadas, una cuenta lenta no retrasa el calendario.
+export type MarketSnapshot = {
   trades: { trades?: Record<string, any> } | null;
   clock: {
     is_open?: boolean;
@@ -50,24 +55,44 @@ export type Snapshot = {
     next_close?: string;
   } | null;
 };
+export type AccountSnapshot = {
+  account: any;
+  positions: any[];
+  orders: any[];
+};
 export const EQUITY_SAMPLE_MS = 300000,
   STREAM_SILENCE_MS = 120000;
-export function applySnapshot(s: State, x: Snapshot, t = Date.now()) {
-  s.account = x.account;
-  s.positions = x.positions;
-  s.orders = x.orders;
-  s.lastSync = new Date(t).toISOString();
+const iso = (t: number) => new Date(t).toISOString();
+// Un precio solo sustituye al guardado si es más reciente. La sincronización de
+// cada 30 segundos trae el último trade de /trades/latest, que puede ser anterior
+// al que ya llegó por el WebSocket: antes lo pisaba y el precio retrocedía.
+function newerQuote(at: unknown, saved: Quote | undefined) {
+  const t = typeof at === "string" ? Date.parse(at) : NaN;
+  if (!Number.isFinite(t)) return false;
+  return !saved || !(Date.parse(saved.at) >= t);
+}
+export function applyMarketSnapshot(
+  sh: SharedState,
+  x: MarketSnapshot,
+  t = Date.now(),
+) {
+  sh.marketSync = iso(t);
   // El agente necesita saber si el mercado está abierto: si no, proponer una
   // compra es tirar una evaluación, porque los límites la bloquean después.
   if (x.clock)
-    s.market = {
+    sh.market = {
       open: Boolean(x.clock.is_open),
       nextOpen: x.clock.next_open ?? null,
       nextClose: x.clock.next_close ?? null,
     };
-  if (s.baseline === null) s.baseline = Number(x.account.equity);
   for (const [symbol, trade] of Object.entries(x.trades?.trades ?? {}))
-    if (trade?.p > 0) s.quotes[symbol] = { price: trade.p, at: trade.t };
+    if (
+      sh.settings.symbols.includes(symbol) &&
+      Number.isFinite(trade?.p) &&
+      trade.p > 0 &&
+      newerQuote(trade.t, sh.quotes[symbol])
+    )
+      sh.quotes[symbol] = { price: trade.p, at: trade.t };
   // Solo se avisa cuando cambia, porque esto se sincroniza cada 30 segundos.
   for (const [feed, ok, texto] of [
     [
@@ -81,24 +106,32 @@ export function applySnapshot(s: State, x: Snapshot, t = Date.now()) {
       "Alpaca no devuelve el calendario de mercado. Se asume cerrado y no se envían órdenes.",
     ],
   ] as const)
-    if (s.feeds[feed] !== ok) {
-      s.feeds[feed] = ok;
-      log(
-        s,
+    if (sh.feeds[feed] !== ok) {
+      sh.feeds[feed] = ok;
+      logShared(
+        sh,
         ok ? "market" : "error",
         ok ? `Alpaca vuelve a responder: ${feed}` : texto,
       );
     }
+}
+// Una muestra de patrimonio cada EQUITY_SAMPLE_MS como mucho.
+export function sampleEquity(
+  s: Pick<State, "equity">,
+  value: number,
+  t = Date.now(),
+) {
   if (
     !s.equity.length ||
     t - Date.parse(s.equity.at(-1)!.at) > EQUITY_SAMPLE_MS
   )
-    s.equity.push({
-      at: new Date(t).toISOString(),
-      value: Number(x.account.equity),
-    });
+    s.equity.push({ at: iso(t), value });
+}
+// La decisión sigue a su orden, y una orden ejecutada despierta al agente. Vale
+// para las órdenes de Alpaca y para las de la simulación interna.
+export function reconcileDecisions(s: State, orders: any[]) {
   for (const d of s.decisions) {
-    const o = x.orders.find((o) => o.client_order_id === d.id);
+    const o = orders.find((o) => o.client_order_id === d.id);
     if (o && d.status !== o.status) {
       d.status = o.status;
       d.orderId = o.id;
@@ -108,28 +141,99 @@ export function applySnapshot(s: State, x: Snapshot, t = Date.now()) {
     }
   }
 }
-export function applyMarket(
-  s: State,
+const TERMINAL_ORDERS = [
+  "filled",
+  "canceled",
+  "expired",
+  "replaced",
+  "done_for_day",
+  "stopped",
+  "rejected",
+];
+// Apunta en fills las órdenes de Alpaca ya terminadas con algo ejecutado, una
+// vez cada una. Una orden que no es de ninguna decisión la puso el propietario a
+// mano en la misma cuenta. Devuelve cuántas añadió.
+export function recordAlpacaFills(
+  s: Pick<State, "fills" | "decisions">,
+  orders: any[],
+  t = Date.now(),
+) {
+  const known = new Set(s.fills.map((f) => f.orderId));
+  const decided = new Set(s.decisions.map((d) => d.id));
+  const nuevas: Fill[] = [];
+  for (const o of orders ?? []) {
+    const qty = Number(o?.filled_qty),
+      price = Number(o?.filled_avg_price);
+    if (
+      !o?.id ||
+      known.has(String(o.id)) ||
+      !TERMINAL_ORDERS.includes(o.status) ||
+      !(qty > 0) ||
+      !(price > 0) ||
+      (o.side !== "buy" && o.side !== "sell")
+    )
+      continue;
+    known.add(String(o.id));
+    const f: Fill = {
+      orderId: String(o.id),
+      symbol: String(o.symbol),
+      side: o.side,
+      qty,
+      price,
+      at: o.filled_at ?? o.updated_at ?? iso(t),
+      realizedPl: 0,
+      rule: "alpaca",
+    };
+    if (decided.has(o.client_order_id)) f.decisionId = o.client_order_id;
+    else f.manual = true;
+    nuevas.push(f);
+  }
+  nuevas.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  s.fills.push(...nuevas);
+  return nuevas.length;
+}
+// La cuenta de Alpaca, sincronizada cada 30 segundos.
+export function applyAccount(s: State, x: AccountSnapshot, t = Date.now()) {
+  s.account = x.account;
+  s.positions = x.positions;
+  s.orders = x.orders;
+  s.lastSync = iso(t);
+  if (s.baseline === null) s.baseline = Number(x.account.equity);
+  // Una instalación nueva no tenía cuenta al migrar: la comparación empieza en la
+  // primera sincronización.
+  if (s.comparison === null && Number.isFinite(Number(x.account.equity)))
+    s.comparison = comparisonStart(s, t);
+  sampleEquity(s, Number(x.account.equity), t);
+  recordAlpacaFills(s, x.orders, t);
+  reconcileDecisions(s, x.orders);
+}
+// Latido, estado del WebSocket y precios recibidos. Compartido: los precios son
+// los mismos para todas las simulaciones.
+export function applyQuotes(
+  sh: SharedState,
   quotes: Record<string, Quote>,
   connected: boolean,
   lastTick: number,
   t = Date.now(),
 ) {
-  s.heartbeat = new Date(t).toISOString();
-  s.stream =
+  sh.heartbeat = iso(t);
+  sh.stream =
     connected && t - lastTick < STREAM_SILENCE_MS
       ? "connected"
       : "disconnected";
   for (const [symbol, q] of Object.entries(quotes))
     if (
-      s.settings.symbols.includes(symbol) &&
-      (!s.quotes[symbol] || Date.parse(q.at) > Date.parse(s.quotes[symbol].at))
+      sh.settings.symbols.includes(symbol) &&
+      newerQuote(q.at, sh.quotes[symbol])
     )
-      s.quotes[symbol] = q;
+      sh.quotes[symbol] = q;
   // Al quitar un activo de la lista su último precio deja de actualizarse. Si se
   // queda guardado, el agente lo sigue viendo en su contexto cada vez más viejo.
-  for (const symbol of Object.keys(s.quotes))
-    if (!s.settings.symbols.includes(symbol)) delete s.quotes[symbol];
+  for (const symbol of Object.keys(sh.quotes))
+    if (!sh.settings.symbols.includes(symbol)) delete sh.quotes[symbol];
+}
+// Las vigilancias de una simulación con los precios compartidos.
+export function applyWatches(s: State, t = Date.now()) {
   // IEX también da operaciones antes de la apertura y después del cierre. Una
   // vigilancia se activa una sola vez: si lo hiciera a esa hora, el agente no
   // podría operar y la condición se perdería.
@@ -149,25 +253,67 @@ export function claimIntent(s: State, marketOpen: boolean, t = Date.now()) {
   const d = s.decisions.find((x) => x.status === "pending");
   if (!d) return null;
   const shadow = { ...s, decisions: s.decisions.filter((x) => x.id !== d.id) };
-  // Entre la decisión y el envío puede ejecutarse otra orden. Una venta pensada
-  // para cerrar un largo que ya no existe abriría un corto: eso ya no es lo que
-  // decidió el agente, y no se envía.
-  const ahora = proposalIntent(s, d.proposal);
+  // Entre la decisión y el envío puede ejecutarse otra orden. Si una venta pide
+  // más acciones de las que quedan, orderGuard la bloquea. Si pasa, se anota la
+  // intención con las posiciones de ahora, que es lo que se envía.
   const error = !marketOpen
     ? "Mercado cerrado"
-    : (orderGuard(shadow, d.proposal, t) ??
-      (d.intent && ahora && !sameMeaning(d.intent, ahora)
-        ? "Las posiciones cambiaron desde la decisión y la orden ya no significa lo mismo"
-        : null));
+    : orderGuard(shadow, d.proposal, t);
   if (error) {
     d.status = "blocked";
     d.error = error;
     return null;
   }
+  const ahora = proposalIntent(s, d.proposal);
   if (ahora) d.intent = ahora;
   d.status = "submitting";
   d.sentAt = new Date(t).toISOString();
   return structuredClone(d);
+}
+// Con MODEL_CONCURRENCY=1 el proveedor atiende una llamada a la vez y el worker
+// elige qué simulación va primero. Cada candidata trae el origen del primer
+// evento de su cola, o "review" si no tiene cola y solo podría tener revisiones
+// vencidas, que viven en la fila fría y no se ven desde aquí.
+export type SimCandidate = {
+  sim: SimId;
+  trigger: UsageTrigger | undefined;
+  queuedAt: string | null;
+};
+// Primero lo que no puede esperar: una vigilancia cumplida o una orden
+// ejecutada. Después lo que pide el propietario, las noticias, la revisión
+// periódica y, al final, las revisiones de operaciones.
+export const SIM_PRIORITY: Record<UsageTrigger, number> = {
+  watch: 0,
+  other: 0,
+  manual: 1,
+  news: 2,
+  preopen: 2,
+  periodic: 3,
+  review: 4,
+};
+// La simulación que va ahora, o null si no hay candidatas. En empate va la que
+// no se atendió la última vez, para que se turnen; si aún empatan, la que lleva
+// más tiempo esperando.
+export function pickSim(
+  candidates: SimCandidate[],
+  lastServed: SimId | null,
+): SimId | null {
+  const prioridad = (c: SimCandidate) =>
+    SIM_PRIORITY[c.trigger ?? "other"] ?? SIM_PRIORITY.other;
+  const espera = (c: SimCandidate) => {
+    const t = c.queuedAt ? Date.parse(c.queuedAt) : NaN;
+    return Number.isFinite(t) ? t : Infinity;
+  };
+  const ordenadas = candidates
+    .map((c, i) => ({ c, i }))
+    .sort(
+      (a, b) =>
+        prioridad(a.c) - prioridad(b.c) ||
+        Number(a.c.sim === lastServed) - Number(b.c.sim === lastServed) ||
+        espera(a.c) - espera(b.c) ||
+        a.i - b.i,
+    );
+  return ordenadas[0]?.c.sim ?? null;
 }
 // Reserves the daily budget before any tokens are spent.
 export function claimJob(s: State, ready: boolean, t = Date.now()): Job | null {
@@ -211,7 +357,7 @@ export function claimJob(s: State, ready: boolean, t = Date.now()): Job | null {
         (d) =>
           !d.review &&
           !d.reviewSkipped &&
-          (d.reviewAttempts ?? 0) < 3 &&
+          (d.reviewAttempts ?? 0) < REVIEW_ATTEMPTS &&
           Date.parse(d.reviewAt) <= t,
       );
   if (!due && !event) return null;
@@ -331,7 +477,7 @@ export function applyDecision(
     reviewAt: new Date(t + p.reviewAfterHours * 3600000).toISOString(),
   };
   // Con las posiciones de ahora, no con las que vio el modelo: es lo que se
-  // enviaría. Queda sin intención si cruza de largo a corto.
+  // enviaría. Queda sin intención si vende más de lo que se tiene.
   const intent = proposalIntent(s, p);
   if (intent) d.intent = intent;
   s.decisions.push(d);
@@ -403,7 +549,7 @@ export function applyReview(
   adoptLessons(
     s,
     parsed.lessons.map((l) => ({ ...l, decisionId: due.id })),
-    `Lecciones de la revisión de la ${tradeName(due.intent, due.proposal.action).toLowerCase()} de ${due.proposal.symbol ?? "un activo"}`,
+    `Lecciones de la revisión de la ${tradeName(due.proposal.action).toLowerCase()} de ${due.proposal.symbol ?? "un activo"}`,
     t,
   );
   s.modelJob = null;
@@ -413,7 +559,7 @@ export function applyReview(
 
 // El analisis se recalcula cada pocos minutos y solo se guarda si cambia algo.
 export function applyAnalysis(
-  s: State,
+  s: SharedState,
   fresh: Record<string, Analysis>,
   t = Date.now(),
 ) {
@@ -431,7 +577,7 @@ export function applyAnalysis(
   // imposibles, no que se haya recalculado.
   for (const [symbol, a] of Object.entries(kept))
     if (a.barsDiscarded > 0 && a.barsDiscarded !== antes[symbol])
-      log(
+      logShared(
         s,
         "market",
         `${symbol}: ${a.barsDiscarded} ${a.barsDiscarded === 1 ? "sesión descartada" : "sesiones descartadas"} porque el proveedor las dio con datos imposibles.`,
@@ -439,7 +585,7 @@ export function applyAnalysis(
   void t;
 }
 // Las velas de 5 minutos se sustituyen enteras: solo interesa la última sesión.
-export function applyIntraday(s: State, fresh: Record<string, Intraday>) {
+export function applyIntraday(s: SharedState, fresh: Record<string, Intraday>) {
   const kept: Record<string, Intraday> = {};
   for (const symbol of s.settings.symbols) {
     const next = fresh[symbol] ?? s.intraday?.[symbol];
@@ -493,15 +639,24 @@ export function queueSessionScan(s: State, t = Date.now()) {
   return true;
 }
 
-// Guarda las noticias nuevas y despierta al agente una sola vez por tanda.
-export function applyNews(s: State, raw: unknown[], t = Date.now()) {
+// Guarda las noticias nuevas, que son compartidas, y devuelve cuáles lo son.
+export function mergeNews(
+  sh: Pick<SharedState, "stories" | "settings">,
+  raw: unknown[],
+  t = Date.now(),
+) {
   const { stories, fresh } = mergeStories(
-    s.stories,
+    sh.stories,
     raw,
-    s.settings.symbols,
+    sh.settings.symbols,
     t,
   );
-  s.stories = stories;
+  sh.stories = stories;
+  return fresh;
+}
+// Cada simulación decide si una tanda de noticias la despierta, una sola vez por
+// tanda, según su nivel de riesgo y su pausa.
+export function queueNews(s: State, fresh: Story[], t = Date.now()) {
   if (!fresh.length) return 0;
   // Con la bolsa cerrada el agente no puede operar: despertarlo por cada tanda
   // gastaba una llamada para decir que espera. Las noticias se guardan y se

@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { X } from "lucide-react";
 import type { Settings } from "../../src/domain";
+import { SIMS, SIM_IDS } from "../../src/sims";
 import type { Data, ViewProps } from "./types";
 import { money, num, pct } from "../shared";
 import { Group, Meter } from "../ui";
-import { riskOf } from "./settings-risk";
 
 // riskProfile no es una cifra: lo edita su propio bloque.
 type Key = Exclude<keyof Settings, "symbols" | "riskProfile">;
@@ -66,7 +66,7 @@ const GROUPS: { title: string; note: string; fields: Field[] }[] = [
         unit: "USD",
         min: 1,
         max: 100000,
-        hint: "Suma de todas las posiciones. Las cortas cuentan en positivo.",
+        hint: "Suma de todas las posiciones.",
         usage: (s) => {
           const value = s.positions.reduce(
             (a, x) => a + Math.abs(Number(x.market_value)),
@@ -269,12 +269,9 @@ export function Limits(p: ViewProps) {
       className="panel st-limits"
       onSubmit={(e) => {
         e.preventDefault();
-        // El servidor sustituye la configuración entera: el nivel guardado
-        // viaja con los límites para no perderlo.
-        const body: Record<string, unknown> = {
-          symbols,
-          riskProfile: riskOf(s.settings),
-        };
+        // Los límites son compartidos. El nivel de riesgo es de cada
+        // simulación y se guarda aparte.
+        const body: Record<string, unknown> = { symbols };
         for (const k of Object.keys(values) as Key[])
           body[k] = Number(values[k]);
         act("/settings", body, "PUT");
@@ -282,10 +279,11 @@ export function Limits(p: ViewProps) {
     >
       <div className="section-title">
         <div>
-          <h2>Límites operativos</h2>
+          <h2>Límites operativos compartidos</h2>
           <span className="muted">
             Controles previos a cada orden. No garantizan el precio final ni la
-            pérdida máxima.
+            pérdida máxima. Afectan a las dos simulaciones:{" "}
+            {SIM_IDS.map((x) => SIMS[x].label).join(" e ")}.
           </span>
         </div>
       </div>

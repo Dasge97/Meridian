@@ -1,5 +1,11 @@
 import type { State, Decision } from "../../src/domain";
-export type Data = State & {
+import type { Event as ListedEvent } from "../../src/listing";
+import type { SimId, SimSummary } from "../../src/sims";
+export type Data = Omit<State, "events"> & {
+  // Los de la simulación y los compartidos, cada uno con su scope.
+  events: ListedEvent[];
+  // Todas las simulaciones en pocas cifras, para el selector de la cabecera.
+  sims: SimSummary[];
   totals: { decisions: number; events: number; equity: number };
   connection: {
     alpaca: boolean;
@@ -21,4 +27,9 @@ export type ViewProps = {
   openDecision: (d: Decision) => void;
   goTo: (tab: string) => void;
   setError: (message: string) => void;
+  // La simulación que se está viendo, y la ruta de la API para ella: api("/pause")
+  // da "/sims/alpaca/pause". act la usa tal cual y fetch le antepone "/api".
+  // /api/market y PUT /api/settings son compartidos y no la llevan.
+  sim: SimId;
+  api: (path: string) => string;
 };

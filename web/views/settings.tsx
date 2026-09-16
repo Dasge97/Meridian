@@ -50,6 +50,7 @@ function Connection(p: {
 export function SettingsView(p: ViewProps) {
   const { s, busy, act } = p;
   const c = s.connection;
+  const interna = s.broker === "internal";
   const feedsDown = Boolean(s.feeds && (!s.feeds.trades || !s.feeds.clock));
   return (
     <>
@@ -115,40 +116,78 @@ export function SettingsView(p: ViewProps) {
               <OctagonAlert size={18} aria-hidden />
               <h2 id="st-danger-title">Zona peligrosa</h2>
             </div>
-            <h3>Detener operaciones pendientes</h3>
-            <p>
-              Pausa el agente y pide a Alpaca que cancele todas las órdenes
-              abiertas de esta cuenta. También las que hayas puesto a mano.
-            </p>
-            <p className="muted">
-              No vende posiciones. Usa una cuenta Paper exclusiva para Meridian.
-            </p>
-            <Confirm
-              title="¿Pausar y cancelar todas las órdenes abiertas?"
-              description={
-                <>
-                  <p>El agente se pausa.</p>
-                  <p>
-                    Se pide a Alpaca que cancele todas las órdenes abiertas de
-                    esta cuenta Paper, incluidas las manuales. Las posiciones no
-                    se venden.
-                  </p>
-                </>
-              }
-              action="Pausar y cancelar órdenes"
-              danger
-              onConfirm={() => act("/orders/cancel-open")}
-            >
-              <button
-                type="button"
-                className="danger solid"
-                disabled={busy || !c.alpaca}
-              >
-                Pausar y cancelar órdenes
-              </button>
-            </Confirm>
-            {!c.alpaca && (
-              <small>Necesita la conexión con Alpaca configurada.</small>
+            {interna ? (
+              <>
+                <h3>Cancelar órdenes simuladas</h3>
+                <p>
+                  Pausa la simulación Interna y cancela sus órdenes abiertas. No
+                  llama a Alpaca y no toca Alpaca Paper.
+                </p>
+                <p className="muted">No vende posiciones.</p>
+                <Confirm
+                  title="¿Pausar Interna y cancelar sus órdenes simuladas?"
+                  description={
+                    <>
+                      <p>La simulación Interna se pausa.</p>
+                      <p>
+                        Sus órdenes abiertas quedan canceladas. Alpaca Paper
+                        sigue como está. Las posiciones no se venden.
+                      </p>
+                    </>
+                  }
+                  action="Cancelar órdenes simuladas"
+                  danger
+                  onConfirm={() => act(p.api("/orders/cancel-open"))}
+                >
+                  <button
+                    type="button"
+                    className="danger solid"
+                    disabled={busy}
+                  >
+                    Cancelar órdenes simuladas
+                  </button>
+                </Confirm>
+              </>
+            ) : (
+              <>
+                <h3>Detener operaciones pendientes</h3>
+                <p>
+                  Pausa el agente de Alpaca Paper y pide a Alpaca que cancele
+                  todas las órdenes abiertas de esta cuenta. También las que
+                  hayas puesto a mano. La simulación Interna no se toca.
+                </p>
+                <p className="muted">
+                  No vende posiciones. Usa una cuenta Paper exclusiva para
+                  Meridian.
+                </p>
+                <Confirm
+                  title="¿Pausar y cancelar todas las órdenes abiertas?"
+                  description={
+                    <>
+                      <p>El agente se pausa.</p>
+                      <p>
+                        Se pide a Alpaca que cancele todas las órdenes abiertas
+                        de esta cuenta Paper, incluidas las manuales. Las
+                        posiciones no se venden.
+                      </p>
+                    </>
+                  }
+                  action="Pausar y cancelar órdenes"
+                  danger
+                  onConfirm={() => act(p.api("/orders/cancel-open"))}
+                >
+                  <button
+                    type="button"
+                    className="danger solid"
+                    disabled={busy || !c.alpaca}
+                  >
+                    Pausar y cancelar órdenes
+                  </button>
+                </Confirm>
+                {!c.alpaca && (
+                  <small>Necesita la conexión con Alpaca configurada.</small>
+                )}
+              </>
             )}
           </section>
         </div>

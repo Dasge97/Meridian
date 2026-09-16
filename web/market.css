@@ -192,27 +192,3 @@
     gap: 2px 14px;
   }
 }
-
-/* Posición corta en «Posición y vigilancias» */
-.group-title.mk-holding-title {
-  justify-content: flex-start;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-.badge.mk-short {
-  padding: 2px 7px;
-  font-weight: 600;
-  color: var(--warn);
-  background: var(--warn-soft);
-}
-.mk-short-note {
-  margin: 0 0 12px;
-  padding: 8px 12px;
-  border: 1px dashed var(--line-2);
-  border-radius: 8px;
-  background: var(--surface-2);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-  color: var(--ink-2);
-}

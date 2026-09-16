@@ -382,6 +382,98 @@ kbd {
   font-family: var(--mono);
   letter-spacing: 0.03em;
 }
+/* Cada simulación tiene su color, el mismo en el selector y en la comparación. */
+:root {
+  --sim-alpaca: var(--series);
+  --sim-internal: var(--series-2);
+}
+/* Selector de simulación de la cabecera: siempre visible. */
+.sim-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-width: 0;
+}
+button.sim-option {
+  --sim: var(--sim-alpaca);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font-weight: 400;
+  white-space: nowrap;
+  box-shadow: inset 3px 0 0 transparent;
+}
+button.sim-option.sim-internal {
+  --sim: var(--sim-internal);
+}
+button.sim-option:hover {
+  background: var(--surface);
+  border-color: var(--line);
+}
+button.sim-option.current {
+  background: var(--surface);
+  border-color: var(--line-2);
+  color: var(--ink);
+  box-shadow: inset 3px 0 0 var(--sim);
+}
+.sim-text {
+  display: grid;
+  line-height: 1.1;
+  text-align: left;
+}
+.sim-text b {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.sim-text small {
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+.sim-result {
+  font-size: 0.75rem;
+  font-family: var(--mono);
+}
+.sim-result.up {
+  color: var(--up);
+}
+.sim-result.down {
+  color: var(--down);
+}
+.sim-result.flat {
+  color: var(--muted);
+}
+.sim-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-2);
+  flex: none;
+}
+.sim-dot.on {
+  background: var(--up);
+}
+.sim-dot.busy {
+  background: var(--series);
+  animation: mk-pulse 1.2s infinite;
+}
+.sim-dot.down {
+  background: var(--down);
+}
+.badge.sim.internal {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.sim-view {
+  display: contents;
+}
 /* Nivel de riesgo en la cabecera: lleva a Configuración. */
 button.pill.risk {
   padding: 4px 11px;
@@ -1391,6 +1483,23 @@ button.mk-tick[aria-pressed="true"] {
     justify-content: flex-end;
   }
 }
+/* El selector de simulación necesita sitio en la cabecera: el buscador se queda
+   en su icono y su atajo, y con menos ancho el aviso de simulación se esconde
+   (la barra lateral sigue diciendo cuál es). */
+@media (max-width: 1560px) {
+  button.search-trigger {
+    width: auto;
+  }
+  .search-trigger span {
+    display: none;
+  }
+}
+@media (max-width: 1320px) {
+  .badge.sim,
+  .search-trigger kbd {
+    display: none;
+  }
+}
 @media (max-width: 720px) {
   .shell {
     display: block;
@@ -1422,11 +1531,22 @@ button.mk-tick[aria-pressed="true"] {
     display: none;
   }
   header {
-    height: 60px;
-    padding: 0 18px;
+    height: auto;
+    min-height: 60px;
+    padding: 8px 18px;
+    flex-wrap: wrap;
   }
   header {
     gap: 8px;
+  }
+  /* En el móvil el selector va en su propia fila, a todo lo ancho. */
+  .sim-switch {
+    order: 3;
+    width: 100%;
+  }
+  button.sim-option {
+    flex: 1 1 0;
+    justify-content: space-between;
   }
   button.search-trigger {
     width: auto;

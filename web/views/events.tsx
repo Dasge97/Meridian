@@ -54,6 +54,7 @@ export function EventLog(p: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   latestId: string | undefined;
+  api: (path: string) => string;
 }) {
   const [range, setRange] = useState<Range>(ANY_RANGE),
     [text, setText] = useState(""),
@@ -89,7 +90,7 @@ export function EventLog(p: {
     if (q) params.set("q", q);
     if (type) params.set("type", type);
     setLoading(true);
-    fetch("/api/events?" + params, { signal: ctrl.signal })
+    fetch("/api" + p.api("/events?" + params), { signal: ctrl.signal })
       .then((r) => {
         if (!r.ok) throw new Error();
         return r.json() as Promise<EventPage>;

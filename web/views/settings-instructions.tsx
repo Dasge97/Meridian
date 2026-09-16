@@ -36,7 +36,7 @@ export function Instructions(p: ViewProps) {
       className="panel st-instructions"
       onSubmit={async (e) => {
         e.preventDefault();
-        if (await act("/versions", { instructions: text, note })) {
+        if (await act(p.api("/versions"), { instructions: text, note })) {
           setBase(text);
           setNote("");
         }

@@ -57,7 +57,7 @@ function dayLabel(at: string) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-// Cuenta por tipo en el orden en que aparecen: «2 compras · 1 venta en corto».
+// Cuenta por tipo en el orden en que aparecen: «2 compras · 1 venta».
 function daySummary(list: Decision[]) {
   const counts = new Map<string, { n: number; one: string; many: string }>();
   for (const d of list) {
@@ -86,9 +86,7 @@ function Row({ d, onOpen }: { d: Decision; onOpen: () => void }) {
         <ActionIcon d={d} />
         <span className="dc-head">
           <strong className="dc-sym">{p.symbol || "Mercado"}</strong>
-          <span className={"dc-action" + (type.short ? " short" : "")}>
-            {type.text}
-          </span>
+          <span className="dc-action">{type.text}</span>
         </span>
         <span className="dc-text">{p.note || p.reason}</span>
         <span className="dc-meta">
@@ -185,7 +183,7 @@ export function Decisions(p: ViewProps) {
     if (symbol) params.set("symbol", symbol);
     const ctrl = new AbortController();
     setLoading(true);
-    fetch("/api/decisions?" + params, { signal: ctrl.signal })
+    fetch("/api" + p.api("/decisions?" + params), { signal: ctrl.signal })
       .then(async (r) => {
         const body = await r.json().catch(() => null);
         if (!r.ok)
@@ -234,18 +232,6 @@ export function Decisions(p: ViewProps) {
     blocked = recent.filter((d) => d.status === "blocked").length,
     pendingFix = recent.filter(needsReconcile).length;
 
-  // El filtro va por la dirección de la orden. Con cortos, «Compras» también
-  // recoge las recompras y «Ventas» las ventas en corto: la etiqueta lo dice.
-  const shorts = s.decisions.some((d) => decisionType(d).short);
-  const kindLabel = (k: DecisionKind, label: string) =>
-    !shorts
-      ? label
-      : k === "buy"
-        ? "Compras y recompras"
-        : k === "sell"
-          ? "Ventas y cortos"
-          : label;
-
   const symbols =
     symbol && !s.settings.symbols.includes(symbol)
       ? [...s.settings.symbols, symbol]
@@ -268,7 +254,9 @@ export function Decisions(p: ViewProps) {
           <small>
             {partial
               ? `de las ${recent.length} más recientes`
-              : "salieron hacia Alpaca"}
+              : s.broker === "alpaca"
+                ? "salieron hacia Alpaca"
+                : "se ejecutan en la simulación"}
           </small>
         </Stat>
         <Stat label="Bloqueadas" value={String(blocked)}>
@@ -361,7 +349,7 @@ export function Decisions(p: ViewProps) {
                   setPage(1);
                 }}
               >
-                {kindLabel(k, label)} {n !== undefined && <small>{n}</small>}
+                {label} {n !== undefined && <small>{n}</small>}
               </button>
             );
           })}

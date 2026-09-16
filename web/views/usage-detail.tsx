@@ -93,6 +93,7 @@ export function CallDetail(p: {
   onClose: () => void;
   s: Data;
   openDecision: (d: Decision) => void;
+  api: (path: string) => string;
 }) {
   const u = p.item,
     [opening, setOpening] = useState(false),
@@ -113,7 +114,9 @@ export function CallDetail(p: {
     setOpening(true);
     setError("");
     try {
-      const r = await fetch(`/api/decisions/${encodeURIComponent(id)}`);
+      const r = await fetch(
+        "/api" + p.api(`/decisions/${encodeURIComponent(id)}`),
+      );
       const body = await r.json().catch(() => null);
       if (!r.ok || !body?.proposal)
         throw new Error(body?.error ?? "No se encontró la decisión.");

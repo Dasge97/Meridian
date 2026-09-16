@@ -4,11 +4,13 @@ import {
   initialState,
   restoreState,
   settingsSchema,
-  settingsUpdate,
+  sharedSettingsSchema,
   proposalSchema,
   orderGuard,
   orderIntent,
   riskProfileOf,
+  knownIntent,
+  intentLabel,
   RISK_PROFILES,
   INTENT_LABELS,
   now,
@@ -19,7 +21,8 @@ import {
 } from "../src/domain.ts";
 import {
   applyDecision,
-  applyNews,
+  mergeNews,
+  queueNews,
   claimIntent,
   queueNewsBeforeOpen,
   queueSessionScan,
@@ -27,12 +30,26 @@ import {
   type Job,
 } from "../src/agent.ts";
 import {
+  allFallingNothingToReduce,
   context,
   decide,
   recentDecisions,
+  reviewContext,
   riskInstructions,
 } from "../src/model.ts";
 import { decisionNotice, orderNotice, reviewNotice } from "../src/report.ts";
+import { newYorkDate } from "../src/clock.ts";
+import type { Intraday } from "../src/market.ts";
+import { decisionType } from "../web/views/decisions-intent.tsx";
+import { composeState, decomposeState } from "../src/sim-state.ts";
+// Las noticias se guardan en lo compartido y cada simulación decide si despierta,
+// como en el worker.
+function applyNews(s: State, raw: unknown[]) {
+  const { shared, sim } = decomposeState(s);
+  const fresh = mergeNews(shared, raw);
+  Object.assign(s, composeState(shared, sim));
+  return queueNews(s, fresh);
+}
 const LEVELS = Object.keys(RISK_PROFILES) as RiskProfile[];
 function state(level: RiskProfile = "balanced"): State {
   const s = initialState();
@@ -82,12 +99,9 @@ const job = (s: State): Job => ({
   due: null,
   event: "Revisión periódica del mercado",
 });
-const shortable = {
-  tradable: true,
-  status: "active",
-  shortable: true,
-  easy_to_borrow: true,
-};
+const negociable = { tradable: true, status: "active" };
+const PROHIBICION =
+  "No puedes vender en corto: sell solo con acciones que ya tienes, y como mucho las que tienes.";
 
 test("An old saved state without a risk level gets the balanced one", () => {
   const guardado = initialState() as any;
@@ -109,15 +123,18 @@ test("An old saved state without a risk level gets the balanced one", () => {
   assert.equal(riskProfileOf(undefined).key, "balanced");
 });
 
-test("Saving the limits without a risk level keeps the current one", () => {
-  const actual = { ...initialState().settings, riskProfile: "active" as const };
-  const { riskProfile, ...formulario } = actual;
-  void riskProfile;
-  assert.equal(settingsUpdate(actual, formulario).riskProfile, "active");
+test("The shared limits ignore a risk level sent with them", () => {
+  const conNivel = { ...initialState().settings, riskProfile: "aggressive" };
+  const limites = sharedSettingsSchema.parse(conNivel);
   assert.equal(
-    settingsUpdate(actual, { ...formulario, riskProfile: "prudent" })
-      .riskProfile,
-    "prudent",
+    "riskProfile" in limites,
+    false,
+    "el nivel es de cada simulación",
+  );
+  assert.equal(limites.maxOrderUsd, 600);
+  // Uno que no existe tampoco rompe el formulario de límites de antes.
+  assert.doesNotThrow(() =>
+    sharedSettingsSchema.parse({ ...conNivel, riskProfile: "temerario" }),
   );
 });
 
@@ -142,7 +159,11 @@ test("Each level adds its own concrete block of instructions", () => {
   assert.doesNotMatch(texto("balanced"), /Motivo N:/);
   assert.match(texto("aggressive"), /varias operaciones por sesión/);
   assert.match(texto("aggressive"), /confirmación parcial/);
-  assert.match(texto("aggressive"), /abre un corto en lugar de esperar/);
+  assert.match(
+    texto("aggressive"),
+    /reduce o cierra lo que tengas antes de abrir nada nuevo/,
+  );
+  assert.match(texto("aggressive"), /no compres a contracorriente/);
   // Tamaño sobre maxOrderUsd = 600.
   assert.match(texto("prudent"), /25 % de maxOrderUsd, unos 150 USD/);
   assert.match(texto("balanced"), /50 % de maxOrderUsd, unos 300 USD/);
@@ -152,17 +173,13 @@ test("Each level adds its own concrete block of instructions", () => {
   assert.match(texto("prudent"), /distancia de 1 vez el movimiento/);
   assert.match(texto("balanced"), /distancia de 1,5 veces/);
   assert.match(texto("active"), /distancia de entre 2 y 3 veces/);
-  // Los cortos solo se explican donde se permiten.
-  for (const level of ["prudent", "balanced", "active"] as const) {
-    assert.match(texto(level), /No puedes vender en corto/);
-    assert.doesNotMatch(texto(level), /shortable/);
+  // Ningún nivel vende en corto. Lo único que habla de cortos es la prohibición.
+  for (const level of LEVELS) {
+    const t = texto(level);
+    assert.ok(t.includes(PROHIBICION), `${level}: prohíbe los cortos`);
+    assert.doesNotMatch(t.replace(PROHIBICION, ""), /corto|short/i, level);
+    assert.doesNotMatch(RISK_PROFILES[level].description, /corto/i, level);
   }
-  assert.match(texto("aggressive"), /Ventas en corto permitidas/);
-  assert.match(texto("aggressive"), /qty negativa/);
-  assert.match(texto("aggressive"), /shortable y easy_to_borrow/);
-  const conCorto = state("balanced");
-  conCorto.positions = [{ symbol: "AAPL", qty: "-5", market_value: "-1000" }];
-  assert.match(riskInstructions(conCorto), /puedes recomprarlas con buy/i);
 });
 
 test("The level block goes right after the saved instructions, which stay untouched", async () => {
@@ -195,7 +212,8 @@ test("The level block goes right after the saved instructions, which stay untouc
   assert.equal(input.risk.profile, "active");
   assert.equal(input.risk.label, "Activo");
   assert.equal(input.risk.scanEveryMinutes, 15);
-  assert.equal(input.risk.shorts, false);
+  assert.equal("shorts" in input.risk, false, "sin campo de cortos");
+  assert.equal(input.risk.allFallingNothingToReduce, false);
   assert.equal(input.risk.orderTargetUsd, 480);
   assert.deepEqual(input.risk.exitAtrMultiple, { min: 2, max: 3 });
   assert.equal(input.risk.ordersLeftToday, 5);
@@ -343,75 +361,121 @@ test("Repeated waits reach the model as a single summary", () => {
   );
 });
 
-test("Shorts are allowed only on a level with shorts, a shortable asset and an account that allows them", () => {
-  const venta = proposal({ action: "sell", qty: 2, limitPrice: 200 });
-  assert.equal(orderGuard(state("aggressive"), venta), null, "abre un corto");
-  assert.equal(
-    orderGuard(state("aggressive"), venta, Date.now(), shortable),
-    null,
-  );
-  for (const level of ["prudent", "balanced", "active"] as const)
-    assert.equal(
-      orderGuard(state(level), venta),
-      "No se permiten posiciones cortas",
-      `${level}: el motivo de siempre`,
+// Una sesión de 5 minutos ya resumida, cayendo: por debajo del vwap y con la
+// última hora negativa.
+const cayendo = (date: string, over: Partial<Intraday> = {}): Intraday => ({
+  at: now(),
+  date,
+  source: "prueba",
+  bars: [],
+  open: 205,
+  high: 206,
+  low: 195,
+  last: 198,
+  vwap: 200,
+  changeFromOpenPct: -3.4,
+  change30mPct: -0.5,
+  change60mPct: -1.2,
+  positionInDayRangePct: 27,
+  barsUsed: 60,
+  ...over,
+});
+test("Active and aggressive may also wait when every symbol falls and there is nothing to reduce", () => {
+  for (const level of ["active", "aggressive"] as const) {
+    const t = riskInstructions(state(level));
+    assert.match(t, /\(4\) Todo cae y no hay nada que reducir/);
+    assert.match(
+      t,
+      /last está por debajo de vwap y change60mPct es menor que 0/,
     );
-  assert.match(
-    orderGuard(state("aggressive"), venta, Date.now(), {
-      ...shortable,
-      shortable: false,
-    })!,
-    /no permite vender este activo en corto/,
-  );
-  assert.match(
-    orderGuard(state("aggressive"), venta, Date.now(), {
-      ...shortable,
-      easy_to_borrow: false,
-    })!,
-    /no permite vender este activo en corto/,
-  );
-  assert.match(
-    orderGuard(state("aggressive"), venta, Date.now(), {
-      ...shortable,
-      tradable: false,
-    })!,
-    /no negociable/,
-  );
-  const cuenta = state("aggressive");
-  cuenta.account.shorting_enabled = false;
-  assert.match(
-    orderGuard(cuenta, venta)!,
-    /no tiene activadas las ventas en corto/,
-  );
-  // Vender lo que se tiene no necesita que el activo admita cortos.
-  const larga = state("balanced");
-  larga.positions = [{ symbol: "AAPL", qty: "2", market_value: "400" }];
+    assert.match(t, /date igual a clock\.todayNewYork/);
+    assert.match(t, /no tienes acciones de ninguno de esos activos/);
+    assert.match(t, /risk\.allFallingNothingToReduce/);
+  }
+  for (const level of ["prudent", "balanced"] as const)
+    assert.doesNotMatch(riskInstructions(state(level)), /\(4\)/);
+
+  // Lunes 14 de septiembre de 2026 a las 11:00 en Nueva York.
+  const T = Date.parse("2026-09-14T15:00:00Z");
+  const hoy = "2026-09-14";
+  const s = state("aggressive");
+  s.settings.symbols = ["AAPL", "MSFT"];
+  s.intraday = { AAPL: cayendo(hoy), MSFT: cayendo(hoy) };
+  assert.equal(allFallingNothingToReduce(s, T), true);
+  const conMsft = (over: Partial<Intraday> | null) => {
+    const x = structuredClone(s);
+    if (over === null) delete x.intraday.MSFT;
+    else x.intraday.MSFT = cayendo(hoy, over);
+    return allFallingNothingToReduce(x, T);
+  };
+  assert.equal(conMsft({ last: 201 }), false, "por encima del vwap");
+  assert.equal(conMsft({ last: 200 }), false, "justo en el vwap");
+  assert.equal(conMsft({ change60mPct: 0 }), false, "la última hora no cae");
+  assert.equal(conMsft({ vwap: null }), false, "sin vwap");
+  assert.equal(conMsft({ change60mPct: null }), false, "sin la última hora");
+  assert.equal(conMsft({ date: "2026-09-11" }), false, "sesión de otro día");
+  assert.equal(conMsft(null), false, "sin datos de un activo");
+  // Con acciones que vender no vale: primero se reduce.
+  s.positions = [{ symbol: "AAPL", qty: "3", market_value: "594" }];
+  assert.equal(allFallingNothingToReduce(s, T), false);
+  // Una posición de un activo que ya no está permitido no se puede vender.
+  s.positions = [{ symbol: "TSLA", qty: "3", market_value: "900" }];
+  assert.equal(allFallingNothingToReduce(s, T), true);
+  // Y así llega al modelo, calculado con la hora de ahora.
+  const ahora = state("active");
+  ahora.settings.symbols = ["AAPL"];
+  ahora.intraday = { AAPL: cayendo(newYorkDate(Date.now())) };
+  const input = context(ahora, "Revisión periódica del mercado");
+  assert.equal(input.risk.allFallingNothingToReduce, true);
+  ahora.intraday.AAPL.change60mPct = 0.3;
   assert.equal(
-    orderGuard(larga, venta, Date.now(), { ...shortable, shortable: false }),
-    null,
+    context(ahora, "Revisión periódica del mercado").risk
+      .allFallingNothingToReduce,
+    false,
   );
 });
 
-test("A short counts in absolute value for position, exposure and cash", () => {
+test("Selling more than what is held is blocked on every level", () => {
+  const venta = proposal({ action: "sell", qty: 2, limitPrice: 200 });
+  for (const level of LEVELS) {
+    const s = state(level);
+    assert.equal(
+      orderGuard(s, venta),
+      "No se permiten posiciones cortas",
+      `${level}: sin posición`,
+    );
+    assert.equal(
+      orderGuard(s, venta, Date.now(), negociable),
+      "No se permiten posiciones cortas",
+      `${level}: también al enviar`,
+    );
+    s.positions = [{ symbol: "AAPL", qty: "1", market_value: "200" }];
+    assert.equal(
+      orderGuard(s, venta),
+      "No se permiten posiciones cortas",
+      `${level}: más de lo que tiene`,
+    );
+    s.positions = [{ symbol: "AAPL", qty: "2", market_value: "400" }];
+    assert.equal(orderGuard(s, venta), null, `${level}: lo que tiene`);
+  }
+  // Vender lo que se tiene no se frena por el umbral de pérdida ni por el
+  // efectivo: es lo que baja el riesgo. Si el activo no se puede negociar, sí.
+  const larga = state("prudent");
+  larga.positions = [{ symbol: "AAPL", qty: "2", market_value: "400" }];
+  larga.account.equity = "5000";
+  larga.account.cash = "0";
+  assert.equal(orderGuard(larga, venta), null);
+  assert.equal(orderGuard(larga, proposal({ action: "sell", qty: 1 })), null);
+  assert.match(
+    orderGuard(larga, venta, Date.now(), { ...negociable, tradable: false })!,
+    /no negociable/,
+  );
+});
+
+test("Only open buys commit money", () => {
   const s = state("aggressive");
   s.settings.symbols = ["AAPL", "MSFT"];
-  s.positions = [
-    { symbol: "AAPL", qty: "-5", market_value: "-1000", side: "short" },
-  ];
-  const amplia = proposal({ action: "sell", qty: 1, limitPrice: 200 });
-  s.settings.maxPositionUsd = 1100;
-  assert.equal(orderGuard(s, amplia), "Límite por posición");
-  s.settings.maxPositionUsd = 1200;
-  assert.equal(orderGuard(s, amplia), null);
-  s.settings.maxExposureUsd = 1100;
-  assert.equal(orderGuard(s, amplia), "Límite de exposición");
-  s.settings.maxExposureUsd = 2000;
-  // Lo cobrado al vender en corto está en el efectivo, pero se debe.
-  s.account.cash = "1100";
-  assert.equal(orderGuard(s, amplia), "Saldo insuficiente");
-  s.account.cash = "10000";
-  // Una orden de venta abierta sin posición larga abre un corto: compromete.
-  s.positions = [];
+  s.positions = [{ symbol: "MSFT", qty: "10", market_value: "1500" }];
   s.orders = [
     {
       symbol: "MSFT",
@@ -421,35 +485,16 @@ test("A short counts in absolute value for position, exposure and cash", () => {
       limit_price: "150",
     },
   ];
-  s.settings.maxExposureUsd = 1600;
-  assert.equal(orderGuard(s, amplia), "Límite de exposición");
-  // Una compra abierta que recompra un corto no compromete nada.
-  s.positions = [{ symbol: "MSFT", qty: "-10", market_value: "-1500" }];
-  s.orders[0].side = "buy";
+  const compra = proposal({ action: "buy", qty: 1, limitPrice: 200 });
   s.settings.maxExposureUsd = 1800;
-  assert.equal(orderGuard(s, amplia), null);
-});
-
-test("One order never goes from long to short or from short to long", () => {
-  const larga = state("aggressive");
-  larga.positions = [{ symbol: "AAPL", qty: "2", market_value: "400" }];
-  const tres = proposal({ action: "sell", qty: 3 });
-  assert.match(orderGuard(larga, tres)!, /de largo a corto.*las 2 acciones/);
-  larga.settings.riskProfile = "balanced";
-  assert.equal(orderGuard(larga, tres), "No se permiten posiciones cortas");
-  const corta = state("aggressive");
-  corta.positions = [{ symbol: "AAPL", qty: "-2", market_value: "-400" }];
-  assert.match(
-    orderGuard(corta, proposal({ action: "buy", qty: 3 }))!,
-    /de corto a largo.*las 2 acciones/,
-  );
-  // Recomprar se permite en cualquier nivel, también pasado el umbral de pérdida
-  // y sin efectivo: es lo que baja el riesgo.
-  corta.settings.riskProfile = "prudent";
-  corta.account.equity = "5000";
-  corta.account.cash = "0";
-  assert.equal(orderGuard(corta, proposal({ action: "buy", qty: 2 })), null);
-  assert.equal(orderGuard(corta, proposal({ action: "buy", qty: 1 })), null);
+  s.account.cash = "1600";
+  // La venta abierta no compromete efectivo ni exposición.
+  assert.equal(orderGuard(s, compra), null);
+  // Una compra abierta sí: 1.500 comprometidos más 200 no caben en 1.600.
+  s.orders[0].side = "buy";
+  assert.equal(orderGuard(s, compra), "Saldo insuficiente");
+  s.account.cash = "10000";
+  assert.equal(orderGuard(s, compra), "Límite de exposición");
 });
 
 test("Each order stores what it means with the positions of the moment", () => {
@@ -457,35 +502,24 @@ test("Each order stores what it means with the positions of the moment", () => {
   assert.equal(orderIntent(5, "buy", 5), "add_long");
   assert.equal(orderIntent(5, "sell", 2), "reduce_long");
   assert.equal(orderIntent(5, "sell", 5), "close_long");
-  assert.equal(orderIntent(5, "sell", 6), "long_to_short");
-  assert.equal(orderIntent(0, "sell", 5), "open_short");
-  assert.equal(orderIntent(-5, "sell", 5), "add_short");
-  assert.equal(orderIntent(-5, "buy", 2), "reduce_short");
-  assert.equal(orderIntent(-5, "buy", 5), "close_short");
-  assert.equal(orderIntent(-5, "buy", 6), "short_to_long");
+  assert.equal(orderIntent(5, "sell", 6), "exceeds_position");
+  assert.equal(orderIntent(0, "sell", 5), "exceeds_position");
   // Las mismas etiquetas que muestra el panel.
   assert.deepEqual(INTENT_LABELS, {
     open_long: "Compra",
     add_long: "Amplía compra",
     reduce_long: "Venta parcial",
     close_long: "Venta",
-    open_short: "Venta en corto",
-    add_short: "Amplía corto",
-    reduce_short: "Reduce corto",
-    close_short: "Recompra",
   });
   const guardar = (s: State, p: ReturnType<typeof proposal>) =>
     applyDecision(s, job(s), { input: {}, proposal: p, tokens: 1 }, true);
-  const s = state("aggressive");
-  const corto = guardar(s, proposal({ action: "sell", qty: 2 }));
-  assert.equal(corto.status, "pending");
-  assert.equal(corto.intent, "open_short");
-  const r = state("balanced");
-  r.positions = [{ symbol: "AAPL", qty: "-2", market_value: "-400" }];
-  assert.equal(
-    guardar(r, proposal({ action: "buy", qty: 2 })).intent,
-    "close_short",
+  const sinAcciones = guardar(
+    state("aggressive"),
+    proposal({ action: "sell", qty: 2 }),
   );
+  assert.equal(sinAcciones.status, "blocked");
+  assert.equal(sinAcciones.error, "No se permiten posiciones cortas");
+  assert.equal(sinAcciones.intent, undefined);
   const l = state("balanced");
   l.positions = [{ symbol: "AAPL", qty: "3", market_value: "600" }];
   assert.equal(
@@ -493,15 +527,15 @@ test("Each order stores what it means with the positions of the moment", () => {
     "reduce_long",
   );
   assert.equal(guardar(state(), waiting()).intent, undefined);
-  const cruce = state("aggressive");
-  cruce.positions = [{ symbol: "AAPL", qty: "1", market_value: "200" }];
-  const bloqueada = guardar(cruce, proposal({ action: "sell", qty: 2 }));
-  assert.equal(bloqueada.status, "blocked");
-  assert.equal(bloqueada.intent, undefined);
+  const c = state("aggressive");
+  assert.equal(
+    guardar(c, proposal({ action: "buy", qty: 1 })).intent,
+    "open_long",
+  );
 });
 
-test("An order whose meaning changed before sending is not sent", () => {
-  // Decidió cerrar un largo; entre medias se vendió y ahora abriría un corto.
+test("A sale that no longer has its shares when sending is not sent", () => {
+  // Decidió cerrar un largo; entre medias se vendió y ya no quedan acciones.
   const s = state("aggressive");
   s.positions = [{ symbol: "AAPL", qty: "2", market_value: "400" }];
   const d = applyDecision(
@@ -514,8 +548,8 @@ test("An order whose meaning changed before sending is not sent", () => {
   s.positions = [];
   assert.equal(claimIntent(s, true), null);
   assert.equal(d.status, "blocked");
-  assert.match(d.error!, /ya no significa lo mismo/);
-  // Abrir o ampliar significan lo mismo: se envía y se anota lo de ahora.
+  assert.equal(d.error, "No se permiten posiciones cortas");
+  // Abrir y ampliar son compras: se envía y se anota lo de ahora.
   const b = state("aggressive");
   const compra = applyDecision(
     b,
@@ -529,50 +563,63 @@ test("An order whose meaning changed before sending is not sent", () => {
   assert.equal(compra.intent, "add_long");
 });
 
-test("Notices say short sale and buyback instead of sell and buy", () => {
+test("Old decisions with a short intent are still read as a sale or a purchase", () => {
+  // Guardadas cuando el nivel agresivo vendía en corto. El tipo ya no las admite,
+  // pero siguen en la base de datos.
+  const antigua = (intent: string, over: Partial<Decision> = {}): Decision =>
+    ({ ...decision(over), intent }) as unknown as Decision;
   const s = state("aggressive");
-  const corto = decision({
+  const corto = antigua("open_short", {
     proposal: proposal({ action: "sell", qty: 5, limitPrice: 200 }),
-    intent: "open_short",
+    status: "filled",
+  });
+  const recompra = antigua("close_short", {
+    proposal: proposal({ action: "buy", qty: 5, limitPrice: 190 }),
+    status: "filled",
+    review: { at: now(), text: "Salió bien por el proceso", price: 185 },
+  });
+  assert.equal(knownIntent("open_short"), undefined);
+  assert.equal(knownIntent("reduce_long"), "reduce_long");
+  assert.equal(intentLabel("open_short", "sell"), "Venta");
+  assert.equal(intentLabel("close_short", "buy"), "Compra");
+  assert.equal(intentLabel("reduce_long", "sell"), "Venta parcial");
+  // Avisos.
+  assert.match(decisionNotice(s, corto)!.text, /🔴 VENTA · AAPL/);
+  assert.match(decisionNotice(s, corto)!.text, /a 200,00 USD como mínimo/);
+  assert.match(
+    orderNotice(s, corto, "filled")!.text,
+    /Venta de 5 a 200,00 USD/,
+  );
+  assert.match(decisionNotice(s, recompra)!.text, /🟢 COMPRA · AAPL/);
+  assert.match(orderNotice(s, recompra, "filled")!.text, /Compra de 5/);
+  assert.match(reviewNotice(s, recompra)!.text, /Revisión · Compra · AAPL/);
+  for (const aviso of [
+    decisionNotice(s, corto)!.text,
+    orderNotice(s, recompra, "filled")!.text,
+    reviewNotice(s, recompra)!.text,
+  ])
+    assert.doesNotMatch(aviso, /corto|recompra/i);
+  // Panel.
+  assert.equal(decisionType(corto).text, "Venta");
+  assert.equal(decisionType(corto).side, "sell");
+  assert.equal(decisionType(recompra).text, "Compra");
+  assert.equal(decisionType(recompra).side, "buy");
+  // Modelo: la intención desconocida no llega; la acción dice qué fue.
+  s.decisions = [corto, recompra];
+  const recientes = context(s, "Revisión periódica del mercado")
+    .recentDecisions as { intent?: string }[];
+  assert.deepEqual(
+    recientes.map((x) => x.intent),
+    [undefined, undefined],
+  );
+  assert.equal(reviewContext(s, recompra).decision.intent, undefined);
+  // Una pendiente de entonces se bloquea al enviarla, sin romper nada.
+  const pendiente = antigua("open_short", {
+    proposal: proposal({ action: "sell", qty: 2 }),
     status: "pending",
   });
-  const aviso = decisionNotice(s, corto)!;
-  assert.match(aviso.text, /VENTA EN CORTO · AAPL/);
-  assert.match(aviso.text, /5 acciones a 200,00 USD como mínimo/);
-  s.positions = [
-    {
-      symbol: "AAPL",
-      qty: "-5",
-      side: "short",
-      market_value: "-1000",
-      unrealized_pl: "12",
-    },
-  ];
-  const ejecutada = orderNotice(s, corto, "filled")!;
-  assert.match(ejecutada.text, /Venta en corto de 5 a 200,00 USD/);
-  assert.match(
-    ejecutada.text,
-    /Ahora debes 5 de AAPL \(posición corta\), valen 1\.?000,00 USD/,
-  );
-  const recompra = decision({
-    proposal: proposal({ action: "buy", qty: 5, limitPrice: 190 }),
-    intent: "close_short",
-    status: "filled",
-    review: {
-      at: now(),
-      text: "El corto salió bien por el proceso",
-      price: 185,
-    },
-  });
-  assert.match(decisionNotice(s, recompra)!.text, /RECOMPRA · AAPL/);
-  assert.match(decisionNotice(s, recompra)!.text, /como máximo/);
-  assert.match(orderNotice(s, recompra, "filled")!.text, /Recompra de 5/);
-  assert.match(reviewNotice(s, recompra)!.text, /Revisión · Recompra · AAPL/);
-  // Una decisión anterior a la intención se nombra como antes.
-  const antigua = decision({
-    proposal: proposal({ action: "buy" }),
-    status: "filled",
-  });
-  assert.match(decisionNotice(s, antigua)!.text, /COMPRA · AAPL/);
-  assert.match(orderNotice(s, antigua, "filled")!.text, /Compra de 1/);
+  s.decisions = [pendiente];
+  assert.equal(claimIntent(s, true), null);
+  assert.equal(pendiente.status, "blocked");
+  assert.equal(pendiente.error, "No se permiten posiciones cortas");
 });

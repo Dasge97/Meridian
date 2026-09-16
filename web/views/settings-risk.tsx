@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { CircleCheck, TriangleAlert } from "lucide-react";
+import { CircleCheck } from "lucide-react";
 import type { Settings } from "../../src/domain";
 // src/risk.ts no tiene dependencias. src/domain.ts lo reexporta, pero importarlo
 // desde allí mete zod entero (unos 120 KB) en el paquete del navegador.
@@ -10,6 +10,7 @@ import {
   riskProfileOf,
   type RiskProfile,
 } from "../../src/risk";
+import { SIMS } from "../../src/sims";
 import type { Data, ViewProps } from "./types";
 import { num } from "../shared";
 import { Confirm } from "../ui";
@@ -94,18 +95,6 @@ function Option(p: {
             ≈ <span className="num">{exitText(p.k)}</span> × movimiento diario
           </dd>
         </div>
-        <div>
-          <dt>Cortos</dt>
-          <dd className={r.shorts ? "st-risk-yes" : undefined}>
-            {r.shorts ? (
-              <>
-                <TriangleAlert size={13} aria-hidden /> Sí
-              </>
-            ) : (
-              "No"
-            )}
-          </dd>
-        </div>
       </dl>
     </li>
   );
@@ -117,9 +106,8 @@ export function Risk(p: ViewProps) {
   const [choice, setChoice] = useState<RiskProfile>(saved);
   const dirty = choice !== saved,
     next = RISK_PROFILES[choice];
-  // Se envían los límites guardados, no los que estén a medio editar abajo.
-  const save = () =>
-    act("/settings", { ...s.settings, riskProfile: choice }, "PUT");
+  // El nivel es de esta simulación; los límites son compartidos y van aparte.
+  const save = () => act(p.api("/risk"), { riskProfile: choice }, "PUT");
   const apply = (onClick?: () => void) => (
     <button
       type="button"
@@ -134,10 +122,11 @@ export function Risk(p: ViewProps) {
     <section className="panel st-risk-panel" aria-labelledby="st-risk-title">
       <div className="section-title">
         <div>
-          <h2 id="st-risk-title">Nivel de riesgo</h2>
+          <h2 id="st-risk-title">Nivel de riesgo de {SIMS[p.sim].label}</h2>
           <span className="muted">
-            Marca cuánto arriesga el agente y con qué frecuencia mira el
-            mercado. Los límites operativos siguen mandando.
+            Marca cuánto arriesga el agente de esta simulación y con qué
+            frecuencia mira el mercado. Solo cambia {SIMS[p.sim].label}. Los
+            límites operativos siguen mandando.
           </span>
         </div>
       </div>
@@ -178,13 +167,9 @@ export function Risk(p: ViewProps) {
         )}
         {dirty && choice === "aggressive" ? (
           <Confirm
-            title="¿Pasar al nivel Agresivo?"
+            title={`¿Pasar ${SIMS[p.sim].label} al nivel Agresivo?`}
             description={
               <>
-                <p>
-                  El agente podrá abrir posiciones cortas. Vende acciones que no
-                  tiene y pierde si el precio sube.
-                </p>
                 <p>
                   Revisará el mercado cada {next.scanEveryMinutes} minutos, así
                   que hará más llamadas al modelo. El tope sigue siendo{" "}

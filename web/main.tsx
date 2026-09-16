@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { Toaster, toast } from "sonner";
@@ -6,6 +6,7 @@ import { Command } from "cmdk";
 import {
   LayoutDashboard,
   ChartCandlestick,
+  GitCompare,
   ListChecks,
   Crosshair,
   BookOpen,
@@ -20,13 +21,15 @@ import {
   PlugZap,
   LoaderCircle,
   ArrowRight,
+  ArrowLeftRight,
   X,
 } from "lucide-react";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import type { Decision } from "../src/domain";
+import { SIMS, isSimId, type SimId, type SimSummary } from "../src/sims";
 import { riskProfileOf } from "../src/risk";
-import { money, date, marketOpen, marketText } from "./shared";
+import { money, date, marketOpen, marketText, pct, tone } from "./shared";
 import { Badge, Chip, Hint } from "./ui";
 import { Market } from "./market";
 import type { Data } from "./views/types";
@@ -36,9 +39,17 @@ import { Watches } from "./views/watches";
 import { Learning } from "./views/learning";
 import { SettingsView } from "./views/settings";
 import { Usage } from "./views/usage";
+import { Compare } from "./views/compare";
 import { DecisionDetail } from "./views/decision-detail";
 import "./style.css";
-const TABS = [
+const TABS: {
+  name: string;
+  icon: typeof LayoutDashboard;
+  title: string;
+  text: string;
+  // Palabras de más para encontrarla en el buscador.
+  keywords?: string;
+}[] = [
   {
     name: "Resumen",
     icon: LayoutDashboard,
@@ -50,6 +61,13 @@ const TABS = [
     icon: ChartCandlestick,
     title: "Mercado",
     text: "Los mismos datos que recibe el agente para decidir.",
+  },
+  {
+    name: "Comparar",
+    icon: GitCompare,
+    title: "Comparar simulaciones",
+    text: "Las dos en el mismo periodo, con los mismos precios y límites.",
+    keywords: "simulaciones alpaca interna resultado niveles de riesgo",
   },
   {
     name: "Decisiones",
@@ -82,15 +100,111 @@ const TABS = [
     text: "Tú defines los límites. El agente decide dentro de ellos.",
   },
 ];
+// Todo lo que es de una simulación va por su ruta.
+const apiFor = (sim: SimId) => (path: string) => `/sims/${sim}${path}`;
+// La simulación elegida se guarda en ?sim=, para que una recarga o un enlace la
+// conserven, y en el navegador, para abrir el panel donde se dejó. Sin ninguna
+// de las dos, Alpaca.
+const SIM_STORAGE = "meridian.sim";
+function savedSim(): SimId {
+  try {
+    const x = new URLSearchParams(location.search).get("sim");
+    if (isSimId(x)) return x;
+  } catch {}
+  try {
+    const x = localStorage.getItem(SIM_STORAGE);
+    if (isSimId(x)) return x;
+  } catch {}
+  return "alpaca";
+}
+function rememberSim(sim: SimId) {
+  try {
+    const u = new URL(location.href);
+    u.searchParams.set("sim", sim);
+    history.replaceState(history.state, "", u);
+  } catch {}
+  try {
+    localStorage.setItem(SIM_STORAGE, sim);
+  } catch {}
+}
+const riskLabel = (riskProfile: string | undefined) =>
+  riskProfileOf({ riskProfile }).label;
+const simName = (x: Pick<SimSummary, "id" | "riskProfile">) =>
+  `${SIMS[x.id].label} · ${riskLabel(x.riskProfile)}`;
+// Resultado desde el inicio, en %, o null si aún no hay cuenta.
+const resultPct = (x: Pick<SimSummary, "equity" | "baseline">) =>
+  x.equity !== null && x.baseline
+    ? ((x.equity - x.baseline) / x.baseline) * 100
+    : null;
+// Cómo está cada simulación, en una palabra y un color.
+function simStatus(x: SimSummary) {
+  if (x.unresolved > 0)
+    return {
+      kind: "down",
+      text: `${x.unresolved} ${x.unresolved === 1 ? "orden" : "órdenes"} por reconciliar`,
+    };
+  if (x.paused) return { kind: "", text: "Pausada" };
+  if (x.evaluating) return { kind: "busy", text: "Evaluando" };
+  return { kind: "on", text: "Observando" };
+}
 // Aviso tras una acción que sale bien. El resto dice solo que se guardó.
-const done = (url: string, body: unknown) =>
-  url === "/wake"
-    ? "Evaluación pedida al agente"
-    : url === "/pause"
+function done(url: string, body: unknown) {
+  const id = url.match(/^\/sims\/([^/]+)\//)?.[1];
+  const label = isSimId(id) ? SIMS[id].label : "el agente";
+  return url.endsWith("/wake")
+    ? `Evaluación pedida a ${label}`
+    : url.endsWith("/pause")
       ? (body as { paused: boolean }).paused
-        ? "Agente pausado"
-        : "Agente activado"
-      : "Cambios guardados";
+        ? `${label}: pausada`
+        : `${label}: activada`
+      : url.endsWith("/orders/cancel-open")
+        ? `${label}: pausada y órdenes canceladas`
+        : "Cambios guardados";
+}
+// El selector de simulación de la cabecera. Siempre visible: cada botón dice
+// cuál es, su nivel, cómo está y cómo va.
+function SimSwitch(p: {
+  sims: SimSummary[];
+  sim: SimId;
+  onChange: (sim: SimId) => void;
+}) {
+  return (
+    <div className="sim-switch" role="group" aria-label="Simulación">
+      {p.sims.map((x) => {
+        const estado = simStatus(x),
+          resultado = resultPct(x),
+          actual = x.id === p.sim;
+        return (
+          <Hint
+            key={x.id}
+            label={`${simName(x)}. ${estado.text}. ${
+              x.broker === "internal"
+                ? "Ejecuta sus órdenes dentro de Meridian."
+                : "Envía sus órdenes a Alpaca Paper."
+            }`}
+          >
+            <button
+              type="button"
+              className={"sim-option sim-" + x.id + (actual ? " current" : "")}
+              aria-pressed={actual}
+              onClick={() => p.onChange(x.id)}
+            >
+              <i className={"sim-dot " + estado.kind} aria-hidden />
+              <span className="sim-text">
+                <b>{SIMS[x.id].label}</b>
+                <small>{riskLabel(x.riskProfile)}</small>
+              </span>
+              <span className={"sim-result num " + tone(resultado)}>
+                {pct(resultado)}
+              </span>
+              <span className="sr-only">{estado.text}</span>
+            </button>
+          </Hint>
+        );
+      })}
+    </div>
+  );
+}
 async function api(url: string, body?: unknown, method = "POST") {
   const r = await fetch("/api" + url, {
     method,
@@ -110,11 +224,18 @@ function Palette(p: {
   goTo: (tab: string) => void;
   openDecision: (d: Decision) => void;
   act: (url: string, body?: unknown) => Promise<boolean>;
+  api: (path: string) => string;
+  sim: SimId;
+  sims: SimSummary[];
+  paused: boolean;
+  chooseSim: (sim: SimId) => void;
+  pauseAll: () => void;
 }) {
   const run = (fn: () => void) => {
     p.onOpenChange(false);
     fn();
   };
+  const label = SIMS[p.sim].label;
   return (
     <Command.Dialog
       open={p.open}
@@ -131,11 +252,25 @@ function Palette(p: {
       </div>
       <Command.List>
         <Command.Empty>Sin resultados.</Command.Empty>
+        <Command.Group heading="Simulación">
+          {p.sims
+            .filter((x) => x.id !== p.sim)
+            .map((x) => (
+              <Command.Item
+                key={x.id}
+                value={`cambiar a ${simName(x)} simulación ${x.id}`}
+                onSelect={() => run(() => p.chooseSim(x.id))}
+              >
+                <ArrowLeftRight size={16} aria-hidden />
+                Cambiar a {simName(x)}
+              </Command.Item>
+            ))}
+        </Command.Group>
         <Command.Group heading="Ir a">
           {TABS.map((t) => (
             <Command.Item
               key={t.name}
-              value={"ir a " + t.name}
+              value={`ir a ${t.name} ${t.keywords ?? ""}`}
               onSelect={() => run(() => p.goTo(t.name))}
             >
               <t.icon size={16} aria-hidden />
@@ -145,28 +280,40 @@ function Palette(p: {
         </Command.Group>
         <Command.Group heading="Acciones">
           <Command.Item
-            value="reevaluar ahora"
+            value={`reevaluar ${label} ahora`}
             disabled={p.busy}
-            onSelect={() => run(() => p.act("/wake"))}
+            onSelect={() => run(() => p.act(p.api("/wake")))}
           >
             <RefreshCw size={16} aria-hidden />
-            Reevaluar ahora
+            Reevaluar {label}
           </Command.Item>
           <Command.Item
-            value={p.s.paused ? "activar agente" : "pausar agente"}
-            disabled={p.busy || (p.s.paused && !p.ready)}
-            onSelect={() => run(() => p.act("/pause", { paused: !p.s.paused }))}
+            value={`${p.paused ? "activar" : "pausar"} ${label} agente`}
+            disabled={p.busy || (p.paused && !p.ready)}
+            onSelect={() =>
+              run(() => p.act(p.api("/pause"), { paused: !p.paused }))
+            }
           >
-            {p.s.paused ? (
+            {p.paused ? (
               <Play size={16} aria-hidden />
             ) : (
               <Pause size={16} aria-hidden />
             )}
-            {p.s.paused ? "Activar agente" : "Pausar agente"}
+            {p.paused ? `Activar ${label}` : `Pausar ${label}`}
           </Command.Item>
+          {p.sims.filter((x) => !x.paused).length > 1 && (
+            <Command.Item
+              value="pausar las dos simulaciones agente"
+              disabled={p.busy}
+              onSelect={() => run(p.pauseAll)}
+            >
+              <Pause size={16} aria-hidden />
+              Pausar las dos
+            </Command.Item>
+          )}
         </Command.Group>
         {p.s.decisions.length > 0 && (
-          <Command.Group heading="Decisiones recientes">
+          <Command.Group heading={`Decisiones recientes de ${label}`}>
             {[...p.s.decisions]
               .reverse()
               .slice(0, 8)
@@ -198,16 +345,50 @@ function App() {
     [busy, setBusy] = useState(false),
     [palette, setPalette] = useState(false),
     [selected, setSelected] = useState<Decision | null>(null),
-    [detail, setDetail] = useState<{ id: string; input: unknown } | null>(null);
+    [detail, setDetail] = useState<{ id: string; input: unknown } | null>(null),
+    [sim, setSim] = useState<SimId>(savedSim);
+  // La simulación elegida, también para las respuestas que llegan tarde.
+  const simRef = useRef(sim);
+  const simApi = apiFor(sim);
   async function refresh() {
-    const r = await fetch("/api/state");
+    const pedida = simRef.current;
+    const r = await fetch("/api" + apiFor(pedida)("/state"));
     if (r.status === 401) {
       setAuth(false);
       return;
     }
     if (!r.ok) throw new Error("No se puede cargar el panel");
-    setData(await r.json());
+    const d: Data = await r.json();
+    // Una respuesta de la otra simulación, pedida antes de cambiar, no se pinta.
+    if (d.sim !== simRef.current) return;
+    setData(d);
     setAuth(true);
+  }
+  function chooseSim(next: SimId) {
+    if (next === simRef.current) return;
+    simRef.current = next;
+    // El detalle abierto es de la otra simulación.
+    setSelected(null);
+    setDetail(null);
+    setSim(next);
+    rememberSim(next);
+  }
+  useEffect(() => {
+    rememberSim(sim);
+    if (auth) refresh().catch((e) => setError(e.message));
+  }, [sim]);
+  async function pauseAll() {
+    setBusy(true);
+    try {
+      for (const x of data?.sims ?? [])
+        if (!x.paused) await api(apiFor(x.id)("/pause"), { paused: true });
+      await refresh();
+      toast.success("Las dos simulaciones están pausadas");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
   useEffect(() => {
     refresh().catch((e) => setError(e.message));
@@ -258,7 +439,7 @@ function App() {
     }
     let cancelled = false;
     const target = selected.id;
-    fetch(`/api/decisions/${target}`)
+    fetch("/api" + simApi(`/decisions/${target}`))
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!cancelled) setDetail({ id: target, input: d?.input ?? null });
@@ -269,7 +450,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [selected?.id]);
+  }, [selected?.id, sim]);
   if (auth === false)
     return (
       <div className="login">
@@ -336,6 +517,14 @@ function App() {
       </div>
     );
   const s = data,
+    // Hasta que llega el estado de la simulación recién elegida, la cabecera ya
+    // habla de ella con su resumen y el contenido espera.
+    stale = s.sim !== sim,
+    sims: SimSummary[] = s.sims ?? [],
+    chosen = sims.find((x) => x.id === sim) ?? null,
+    paused = chosen?.paused ?? s.paused,
+    label = SIMS[sim].label,
+    interna = SIMS[sim].broker === "internal",
     active = s.watches.filter((w) => w.status === "active"),
     unresolved = s.decisions.filter((d) =>
       ["unknown", "submitting"].includes(d.status),
@@ -346,15 +535,22 @@ function App() {
     ),
     open = marketOpen(s),
     current = TABS.find((t) => t.name === tab) ?? TABS[0];
-  const delta =
-    s.account && s.baseline ? Number(s.account.equity) - s.baseline : null;
-  const agent = s.paused
+  const equity = chosen ? chosen.equity : Number(s.account?.equity),
+    baseline = chosen ? chosen.baseline : s.baseline,
+    delta =
+      equity !== null && Number.isFinite(equity) && baseline
+        ? equity - baseline
+        : null;
+  const agent = paused
     ? { kind: "", text: "Pausado" }
     : !alive
       ? { kind: "down", text: "Worker sin señal" }
-      : s.modelJob
+      : (chosen?.evaluating ?? s.modelJob)
         ? { kind: "busy", text: "Evaluando" }
         : { kind: "on", text: "Observando" };
+  const risk = riskProfileOf({
+    riskProfile: chosen?.riskProfile ?? s.settings.riskProfile,
+  });
   const view = {
     s,
     busy,
@@ -362,6 +558,8 @@ function App() {
     openDecision: setSelected,
     goTo: setTab,
     setError,
+    sim,
+    api: simApi,
   };
   return (
     <div className="shell">
@@ -394,12 +592,12 @@ function App() {
           ))}
         </nav>
         <div className="aside-bottom">
-          <span className="paper">ALPACA PAPER</span>
-          <strong className="num">{money(s.account?.equity)}</strong>
+          <span className="paper">{label.toUpperCase()}</span>
+          <strong className="num">{money(equity)}</strong>
           <div className="aside-delta">
-            {delta !== null && s.baseline ? (
+            {delta !== null && baseline ? (
               <>
-                <Chip value={(delta / s.baseline) * 100} />
+                <Chip value={(delta / baseline) * 100} />
                 <small>desde el inicio</small>
               </>
             ) : (
@@ -422,6 +620,7 @@ function App() {
             <span>Buscar o ir a…</span>
             <kbd>Ctrl K</kbd>
           </button>
+          <SimSwitch sims={sims} sim={sim} onChange={chooseSim} />
           <div className="header-right">
             <Hint label={marketText(s)}>
               <span
@@ -454,17 +653,21 @@ function App() {
               </span>
             </Hint>
             <Hint
-              label={`Revisa el mercado cada ${riskProfileOf(s.settings).scanEveryMinutes} min como máximo. Se cambia en Configuración.`}
+              label={`Nivel de ${label}. Revisa el mercado cada ${risk.scanEveryMinutes} min como máximo. Se cambia en Configuración.`}
             >
               <button
                 type="button"
                 className="pill risk"
                 onClick={() => setTab("Configuración")}
               >
-                Riesgo {riskProfileOf(s.settings).label}
+                Riesgo {risk.label}
               </button>
             </Hint>
-            <span className="badge sim">Solo simulación</span>
+            <span className={"badge sim" + (interna ? " internal" : "")}>
+              {interna
+                ? "Interna: no envía órdenes a Alpaca"
+                : "Solo simulación"}
+            </span>
           </div>
         </header>
         <div className="content">
@@ -474,21 +677,23 @@ function App() {
               <p className="muted">{current.text}</p>
             </div>
             <div className="actions">
-              <Hint label="Pide al agente una evaluación ahora, sin esperar a un evento.">
+              <Hint
+                label={`Pide a ${label} una evaluación ahora, sin esperar a un evento.`}
+              >
                 <button
                   className="with-icon"
-                  disabled={busy}
-                  onClick={() => act("/wake")}
+                  disabled={busy || stale}
+                  onClick={() => act(simApi("/wake"))}
                 >
                   <RefreshCw size={15} aria-hidden /> Reevaluar
                 </button>
               </Hint>
               <button
                 className="primary with-icon"
-                disabled={busy || (s.paused && !ready)}
-                onClick={() => act("/pause", { paused: !s.paused })}
+                disabled={busy || stale || (paused && !ready)}
+                onClick={() => act(simApi("/pause"), { paused: !paused })}
               >
-                {s.paused ? (
+                {paused ? (
                   <>
                     <Play size={15} aria-hidden /> Activar agente
                   </>
@@ -544,24 +749,37 @@ function App() {
               </p>
             </div>
           )}
-          {tab === "Resumen" && <Summary {...view} />}
-          {tab === "Mercado" && <Market {...view} />}
-          {tab === "Decisiones" && <Decisions {...view} />}
-          {tab === "Vigilancias" && <Watches {...view} />}
-          {tab === "Aprendizaje" && <Learning {...view} />}
-          {tab === "Uso" && <Usage {...view} />}
-          {tab === "Configuración" && <SettingsView {...view} />}
+          {stale ? (
+            <p className="loading" role="status">
+              <LoaderCircle className="spin" size={18} aria-hidden />
+              Cargando {label}…
+            </p>
+          ) : (
+            // Cambiar de simulación monta la vista de nuevo: paginación, filtros
+            // y formularios a medias no pasan de una a otra.
+            <div key={sim} className="sim-view">
+              {tab === "Resumen" && <Summary {...view} />}
+              {tab === "Mercado" && <Market {...view} />}
+              {tab === "Comparar" && <Compare {...view} />}
+              {tab === "Decisiones" && <Decisions {...view} />}
+              {tab === "Vigilancias" && <Watches {...view} />}
+              {tab === "Aprendizaje" && <Learning {...view} />}
+              {tab === "Uso" && <Usage {...view} />}
+              {tab === "Configuración" && <SettingsView {...view} />}
+            </div>
+          )}
           <footer>
             MERIDIAN <span>Laboratorio personal de agentes · v0.1</span>
             <span>Datos de tu cuenta. Sin resultados de ejemplo.</span>
           </footer>
         </div>
       </main>
-      {selected && (
+      {selected && !stale && (
         <DecisionDetail
           s={s}
           busy={busy}
           act={act}
+          api={simApi}
           selected={selected}
           setSelected={setSelected}
           detail={detail}
@@ -576,6 +794,12 @@ function App() {
         goTo={setTab}
         openDecision={setSelected}
         act={act}
+        api={simApi}
+        sim={sim}
+        sims={sims}
+        paused={paused}
+        chooseSim={chooseSim}
+        pauseAll={pauseAll}
       />
     </div>
   );

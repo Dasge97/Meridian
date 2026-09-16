@@ -22,24 +22,28 @@
 
 Meridian conecta un agente a **Alpaca Paper Trading** y conserva lo necesario para entender cada decisión: qué información tenía, qué esperaba, qué hizo y qué observó después. Su panel está pensado para un propietario y su servidor personal.
 
+Hay dos simulaciones a la vez, con los mismos precios, noticias y límites. **Alpaca Paper** envía sus órdenes a la cuenta Paper y empieza en el nivel de riesgo Equilibrado. **Interna** ejecuta sus órdenes dentro de Meridian, sin enviar nada a Alpaca, y empieza en Agresivo. Así se ve qué hace el mismo agente con otro nivel de riesgo sin tocar la cuenta Paper. La pestaña Comparar las pone una al lado de la otra.
+
 El agente puede dejarse vigilancias: «si el precio llega a X, vuelve a analizarlo». Un proceso escucha el mercado y comprueba esas condiciones sin llamar continuamente al modelo. Cuando se cumple una, el agente reevalúa; alcanzar un precio **no obliga a comprar**.
 
 > **Estado: primera versión funcional, exclusivamente simulación.** El código no contiene un destino de trading real. Para activarlo debes configurar tus credenciales de Alpaca Paper y de un modelo compatible, desplegarlo y completar la prueba de aceptación descrita abajo. No incluye datos ni beneficios inventados.
 
 ## Qué incluye
 
-| Área        | Funcionalidad                                                                        |
-| ----------- | ------------------------------------------------------------------------------------ |
-| Panel       | Patrimonio, posiciones, conexión, horario de la bolsa, llamadas y actividad          |
-| Mercado     | Velas diarias y de 5 minutos, indicadores, resumen de la sesión y noticias           |
-| Avisos      | Bot de Telegram que cuenta qué hace el agente y por qué, solo cuando importa         |
-| Decisiones  | Contexto guardado, hipótesis, versión, orden y revisión posterior                    |
-| Vigilancias | Precio ≤ / ≥, caducidad, invalidación, activación única y cancelación                |
-| Aprendizaje | Lecciones que el agente saca de sus operaciones y adopta solo, hasta 15 activas      |
-| Evolución   | Versiones automáticas, descartar lecciones, editar instrucciones y recuperar versión |
-| Ejecución   | Órdenes limitadas de acciones enteras en Alpaca Paper, varias abiertas a la vez      |
-| Controles   | Lista de activos, efectivo disponible, exposición, órdenes/día, llamadas/día y pausa |
-| Operación   | Acceso privado, PostgreSQL persistente, Docker Compose y proceso independiente       |
+| Área         | Funcionalidad                                                                        |
+| ------------ | ------------------------------------------------------------------------------------ |
+| Panel        | Patrimonio, posiciones, conexión, horario de la bolsa, llamadas y actividad          |
+| Simulaciones | Alpaca Paper e Interna, cada una con su nivel de riesgo, cuenta, memoria y pausa     |
+| Comparación  | Patrimonio en índice 100, resultado en USD, operaciones, acierto y tokens de las dos |
+| Mercado      | Velas diarias y de 5 minutos, indicadores, resumen de la sesión y noticias           |
+| Avisos       | Bot de Telegram que cuenta qué hace el agente y por qué, solo cuando importa         |
+| Decisiones   | Contexto guardado, hipótesis, versión, orden y revisión posterior                    |
+| Vigilancias  | Precio ≤ / ≥, caducidad, invalidación, activación única y cancelación                |
+| Aprendizaje  | Lecciones que el agente saca de sus operaciones y adopta solo, hasta 15 activas      |
+| Evolución    | Versiones automáticas, descartar lecciones, editar instrucciones y recuperar versión |
+| Ejecución    | Órdenes limitadas de acciones enteras en Alpaca Paper o simuladas en la Interna      |
+| Controles    | Límites compartidos por las dos, nivel de riesgo y pausa de cada una, sin cortos     |
+| Operación    | Acceso privado, PostgreSQL persistente, Docker Compose y proceso independiente       |
 
 ## Cómo funciona
 
@@ -47,29 +51,29 @@ El agente puede dejarse vigilancias: «si el precio llega a X, vuelve a analizar
 flowchart TD
   A[Datos de mercado IEX] --> B[Vigilancias persistentes]
   B -->|Condición cumplida| C[Cola de eventos]
-  D[Orden ejecutada, revisión cada 30 min o petición manual] --> C
+  D[Orden ejecutada, revisión periódica o petición manual] --> C
   C --> E[Agente con memoria versionada]
   E --> F[Esperar y crear vigilancias]
   F --> B
   E --> G[Validar límites]
-  G --> H[Alpaca Paper]
+  G --> H[Alpaca Paper o ejecución interna]
   H --> D
   H --> I[Revisión de la operación]
   I --> J[Lecciones adoptadas en nueva versión]
   J --> E
 ```
 
-No hay un cron que decida comprar a una hora concreta. El worker mantiene un WebSocket de operaciones IEX, comprueba condiciones aproximadamente cada 2 segundos y sincroniza la cuenta cada 30 segundos. Esos intervalos son mantenimiento: las llamadas al modelo se activan por eventos o por revisiones pendientes. Mercado, bróker, modelo, velas y noticias corren en bucles separados, así que una llamada al modelo no interrumpe la comprobación de condiciones. Aun así, **no es un sistema de alta frecuencia**.
+No hay un cron que decida comprar a una hora concreta. El worker mantiene un WebSocket de operaciones IEX, comprueba condiciones aproximadamente cada 2 segundos y sincroniza la cuenta cada 30 segundos. Esos intervalos son mantenimiento: las llamadas al modelo se activan por eventos o por revisiones pendientes. Mercado, velas y noticias corren en bucles separados y compartidos; cada simulación tiene además sus propios bucles de vigilancias, bróker y modelo. Una llamada al modelo no interrumpe la comprobación de condiciones, y la evaluación de una simulación no frena a la otra. Aun así, **no es un sistema de alta frecuencia**.
 
-Con la bolsa abierta, el agente evalúa el mercado al menos cada 30 minutos aunque no haya noticias ni vigilancias. Sus instrucciones le piden buscar oportunidades concretas cada sesión, sin cuotas de operaciones.
+Con la bolsa abierta, cada simulación evalúa el mercado aunque no haya noticias ni vigilancias: cada 30 minutos en Prudente, 20 en Equilibrado, 15 en Activo y 10 en Agresivo, sin gastar las llamadas del día antes del cierre. El nivel de riesgo también dice cuándo puede esperar: en Activo y Agresivo, solo por un motivo de una lista cerrada, así que el agente opera más. Ningún nivel vende en corto.
 
 Con la bolsa cerrada el agente no se despierta por noticias ni por vigilancias: no podría operar. Las noticias se guardan y se comentan juntas en la media hora previa a la apertura.
 
-Las vigilancias siempre **reevalúan**, no ejecutan planes ciegamente. El agente puede comprar, vender o esperar; sus propuestas se validan con Zod y con límites que no puede editar. Cada intención tiene un `client_order_id` estable. Un timeout de envío provoca pausa y reconciliación, nunca un reenvío automático.
+Las vigilancias siempre **reevalúan**, no ejecutan planes ciegamente. El agente puede comprar, vender lo que tiene o esperar; sus propuestas se validan con Zod y con límites que no puede editar. En Alpaca, cada intención tiene un `client_order_id` estable y un timeout de envío provoca pausa y reconciliación, nunca un reenvío automático. En la Interna la orden se acepta en la misma transacción que la reserva, así que no queda nada que reconciliar.
 
 ### Aprender no significa reentrenar
 
-Esta versión emplea memoria y versiones de instrucciones; no modifica los pesos del modelo. Solo se revisan las decisiones que llegaron a enviar una orden. Esas revisiones generan **hipótesis de aprendizaje**, no verdades demostradas, y el agente las adopta sin esperar al propietario. Protecciones: como mucho 15 lecciones activas, la más antigua se retira al pasar el tope; la revisión no ve las noticias, para que ninguna regla nazca de un titular; y cada cambio crea una versión que se puede deshacer. La revisión distingue calidad de proceso, movimiento del precio y ejecución real de la orden.
+Esta versión emplea memoria y versiones de instrucciones; no modifica los pesos del modelo. Solo se revisan las decisiones que llegaron a enviar una orden. Esas revisiones generan **hipótesis de aprendizaje**, no verdades demostradas, y el agente las adopta sin esperar al propietario. Protecciones: como mucho 15 lecciones activas, la más antigua se retira al pasar el tope; la revisión no ve las noticias, para que ninguna regla nazca de un titular; y cada cambio crea una versión que se puede deshacer. La revisión distingue calidad de proceso, movimiento del precio y ejecución real de la orden. Cada simulación aprende por su cuenta. Las operaciones anteriores a la separación solo las revisa Alpaca, para no pagar dos veces la misma revisión.
 
 ## Inicio rápido
 
@@ -120,7 +124,9 @@ Abre el panel, inicia sesión y revisa **Configuración**. Verifica que la cuent
 6. Si propone una orden, compara estado e identificador con Alpaca. Si no propone operar, no se considera un fallo.
 7. Pausa y verifica que no se crean nuevas órdenes. Las ya enviadas requieren cancelación explícita.
 8. Aporta una lección desde el panel y verifica que entra sola en una nueva versión. Recupera la anterior para comprobar la reversibilidad.
-9. Reinicia los contenedores y verifica la persistencia del historial y las vigilancias.
+9. Cambia a **Interna** con el selector de la cabecera. Comprueba que tiene su propio nivel, su pausa y sus decisiones, y que sus órdenes no aparecen en Alpaca.
+10. Abre **Comparar** y comprueba que las dos simulaciones salen con su resultado desde el mismo punto de partida.
+11. Reinicia los contenedores y verifica la persistencia del historial y las vigilancias de las dos.
 
 ## Desarrollo y pruebas
 
@@ -150,14 +156,15 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 - Solo acciones/ETF estadounidenses, unidades enteras, órdenes limitadas `day`, sin cortos ni margen. No incluye cripto, fracciones, datos fundamentales ni backtesting.
 - Las noticias son titulares y resúmenes de terceros. No se verifican, y el agente las recibe con el aviso de que pueden estar equivocadas o desfasadas.
 - El análisis es técnico: velas diarias con medias, variaciones, volatilidad, rango de 52 semanas y volumen relativo, y la última sesión en velas de 5 minutos con precio medio ponderado por volumen y cambios a 30 y 60 minutos. No hay patrones de velas ni comparación con un índice.
-- Cada llamada al modelo lleva hasta unos 30.000 tokens de contexto. Con 20 activos y una revisión cada 30 minutos, calcula del orden de un millón de tokens al día. Pon un límite de gasto en el proveedor del modelo.
+- Cada llamada al modelo lleva hasta unos 30.000 tokens de contexto. Con 20 activos y una revisión cada 30 minutos, calcula del orden de un millón de tokens al día por simulación. Las dos llaman al modelo por separado, así que el gasto se dobla, y en los niveles que revisan más a menudo sube. Pon un límite de gasto en el proveedor del modelo.
 - El precio del momento llega por IEX, que tiene cobertura parcial. Los precios caducan para operar tras 90 segundos; la ausencia de operaciones recientes puede bloquear decisiones legítimas. El histórico diario sí es consolidado.
 - El proveedor de datos devuelve de vez en cuando velas con valores imposibles. Se descartan y se cuenta cuántas, pero ningún filtro detecta un error pequeño y verosímil.
-- El panel muestra patrimonio y posiciones, no atribución contable por estrategia ni comparación con un índice. Cambiar el saldo del simulador afecta la variación mostrada.
+- El panel muestra patrimonio y posiciones y compara las dos simulaciones entre sí, no con un índice ni con atribución contable por estrategia. Cambiar el saldo del simulador de Alpaca afecta la variación mostrada.
+- La ejecución de la Interna es una aproximación: la orden que llega ejecutable toma el último precio y la que espera se llena a su precio límite, sin comisiones ni ejecuciones parciales, con el precio que ve el worker cada 2 segundos. Alpaca ejecuta de verdad, así que la comparación no es exacta.
 - Memoria contextual y revisión cualitativa: no se ha demostrado rentabilidad ni mejora estadística. La simulación no reproduce todos los costes/ejecuciones reales.
-- La pausa no liquida posiciones ni revoca una petición HTTP ya en vuelo. La cancelación solicita a Alpaca cancelar todas las órdenes de la cuenta; confirma después su estado.
-- Un único propietario y un único worker activo. El estado vive en dos filas JSONB de PostgreSQL: sencillo para un laboratorio personal, no pensado para múltiples usuarios.
-- El historial está acotado a propósito: 2.000 decisiones, 1.000 eventos y una curva de patrimonio submuestreada por hora pasados 3 días. El contexto guardado solo se conserva en las 500 decisiones más recientes. Exporta o copia la base de datos si quieres conservarlo todo.
+- La pausa no liquida posiciones ni revoca una petición HTTP ya en vuelo, y solo afecta a la simulación elegida. En Alpaca, la cancelación solicita cancelar todas las órdenes de la cuenta; confirma después su estado. En la Interna cancela sus órdenes simuladas sin llamar a Alpaca.
+- Un único propietario y un único worker activo. El estado vive en seis filas JSONB de PostgreSQL, en la tabla `meridian_rows`: lo compartido y cada simulación, cada uno con una fila que cambia a menudo y otra con el historial. Sencillo para un laboratorio personal, no pensado para múltiples usuarios.
+- El historial está acotado a propósito, por simulación: 2.000 decisiones, 1.000 eventos y una curva de patrimonio submuestreada por hora pasados 3 días. El contexto guardado solo se conserva en las 500 decisiones más recientes. Exporta o copia la base de datos si quieres conservarlo todo.
 - Las revisiones vencidas se procesan cuando el agente está activo y no hay eventos en cola, con el mismo límite diario y espera mínima. No son revisiones a una hora exacta. Cada revisión admite hasta 3 intentos.
 - Las lecciones automáticas pueden equivocarse: una operación aislada no demuestra una regla. Revisa de vez en cuando la pestaña Aprendizaje y descarta lo que no tenga sentido.
 - No hay motor de ejecución de código generado por IA. El agente solo puede proponer acciones tipadas y vigilancias dentro de los límites.
@@ -166,13 +173,22 @@ CI ejecuta pruebas, compilación, auditoría de dependencias de producción y co
 
 ```text
 src/domain.ts     Esquemas, límites de riesgo y poda del historial
+src/risk.ts       Niveles de riesgo, sin dependencias
+src/sims.ts       Lista de simulaciones, sin dependencias
+src/sim-state.ts  Qué va en cada fila y cómo nace la Interna, sin entrada/salida
+src/paper.ts      Ejecución de las órdenes de la Interna, sin entrada/salida
+src/compare.ts    Comparación de las simulaciones, sin entrada/salida
+src/listing.ts    Filtros y páginas de decisiones y eventos, sin entrada/salida
+src/usage.ts      Consumo del modelo por llamada, sin entrada/salida
 src/clock.ts      Horario de la bolsa ya calculado, sin entrada/salida
 src/market.ts     Validación de velas e indicadores, sin entrada/salida
 src/news.ts       Filtrado y caducidad de noticias, sin entrada/salida
 src/report.ts     Qué merece un aviso y cómo se redacta, sin entrada/salida
 src/telegram.ts   Envío del aviso
 src/agent.ts      Transiciones de estado del worker, sin entrada/salida
-src/worker.ts     Conexión de mercado, bucles y llamadas a Alpaca
+src/worker.ts     Conexión de mercado, bucles compartidos y llamadas a Alpaca
+src/sim-worker.ts Bucles de cada simulación: vigilancias, bróker y modelo
+src/db.ts         Filas de PostgreSQL, transacciones y migración
 src/server.ts     API HTTP y panel estático
 web/              Panel React en español, responsive y sin datos ficticios
 tests/            Validaciones de riesgo, transiciones y pruebas de integración

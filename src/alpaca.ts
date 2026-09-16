@@ -62,25 +62,32 @@ export async function alpaca(
     await new Promise((r) => setTimeout(r, ALPACA_RETRY_DELAY_MS));
   }
 }
-export async function snapshot(symbols: string[]) {
-  // Cuenta, posiciones y órdenes son obligatorias: los límites dependen de ellas.
+// La cuenta de Alpaca: cuenta, posiciones y órdenes. Son obligatorias, porque
+// los límites dependen de ellas; si falla una, falla la sincronización entera.
+export async function accountSnapshot() {
   const [account, positions, orders] = await Promise.all([
     alpaca("/v2/account"),
     alpaca("/v2/positions"),
     alpaca("/v2/orders?status=all&limit=100&direction=desc"),
   ]);
-  // Precios y calendario pueden faltar. Sin precios recientes o sin saber que el
-  // mercado está abierto no se envían órdenes, pero el panel sigue mostrando la cuenta.
+  return { account, positions, orders };
+}
+// Calendario y últimos precios, compartidos por todas las simulaciones. Pueden
+// faltar: sin precios recientes o sin saber que el mercado está abierto no se
+// envían órdenes, pero el panel sigue mostrando la cuenta.
+export async function marketSnapshot(symbols: string[]) {
   const [trades, clock] = await Promise.all([
-    alpaca(
-      "/v2/stocks/trades/latest?feed=iex&symbols=" + symbols.join(","),
-      "GET",
-      undefined,
-      true,
-    ).catch(() => null),
+    symbols.length
+      ? alpaca(
+          "/v2/stocks/trades/latest?feed=iex&symbols=" + symbols.join(","),
+          "GET",
+          undefined,
+          true,
+        ).catch(() => null)
+      : { trades: {} },
     alpaca("/v2/clock").catch(() => null),
   ]);
-  return { account, positions, orders, trades, clock };
+  return { trades, clock };
 }
 // Velas diarias consolidadas. El feed sip cubre todo el mercado; el feed iex del
 // WebSocket solo ve su propio parqué y sirve para el precio del momento, no para

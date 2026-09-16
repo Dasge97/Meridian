@@ -12,6 +12,7 @@
     "start": "node --import tsx src/server.ts",
     "worker": "node --import tsx src/worker.ts",
     "migrate": "node --import tsx src/migrate.ts",
+    "migrate:down": "node --import tsx src/migrate-down.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "format": "prettier --write src web tests docs README.md *.json *.ts *.yaml .github/workflows/*.yml"
   },

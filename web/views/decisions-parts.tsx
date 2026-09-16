@@ -6,15 +6,11 @@ import { money, date } from "../shared";
 import { decisionType } from "./decisions-intent";
 import "./decisions.css";
 
-// Con intent el icono y el texto dicen si es un corto. El color sigue la
-// dirección del dinero: verde al comprar y rojo al vender.
+// El color sigue la dirección del dinero: verde al comprar y rojo al vender.
 export function ActionIcon({ d, size = 18 }: { d: Decision; size?: number }) {
   const t = decisionType(d);
   return (
-    <span
-      className={"dc-icon " + t.side + (t.short ? " short" : "")}
-      aria-hidden="true"
-    >
+    <span className={"dc-icon " + t.side} aria-hidden="true">
       <t.Icon size={size} strokeWidth={1.9} />
     </span>
   );
