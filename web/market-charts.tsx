@@ -31,6 +31,7 @@ import {
 import type { Data } from "./views/types";
 import { money, num, clockTime, Empty } from "./shared";
 import { Badge, Chip } from "./ui";
+import { decisionType } from "./views/decisions-intent";
 
 export type ChartBars = {
   daily: Record<string, Bar[]>;
@@ -142,7 +143,7 @@ const timeKey = (t: Time) =>
 // Decisiones que llegaron a enviar una orden. Son las que se marcan en la gráfica.
 const SENT = ["filled", "new", "partially_filled", "submitting", "unknown"];
 const tradeText = (d: Decision) =>
-  `${d.proposal.action === "buy" ? "Compra" : "Venta"} de ${d.proposal.qty ?? "—"} a ${money(d.proposal.limitPrice)}`;
+  `${decisionType(d).text} de ${d.proposal.qty ?? "—"} a ${money(d.proposal.limitPrice)}`;
 const watchWords: Record<string, string> = {
   triggered: "activada",
   expired: "caducada",
@@ -411,22 +412,30 @@ export function DailyChart(p: {
           position: buy ? "belowBar" : "aboveBar",
           shape: buy ? "arrowUp" : "arrowDown",
           color: buy ? palette.up : palette.down,
-          text: `${buy ? "Compra" : "Venta"} ${x.decision.proposal.qty ?? ""}`,
+          text: `${decisionType(x.decision).text} ${x.decision.proposal.qty ?? ""}`,
         };
       }),
     );
   }, [events, palette, narrow]);
 
   const entry = position ? Number(position.avg_entry_price) : null;
+  // Alpaca da los cortos con unidades negativas.
+  const short = Boolean(
+    position && (position.side === "short" || Number(position.qty) < 0),
+  );
   const linesKey = JSON.stringify([
     watches.map((w) => [w.operator, w.price]),
     entry,
+    short,
   ]);
   useEffect(() => {
     const x = series.current;
     if (!x) return;
     for (const l of lines.current) x.candles.removePriceLine(l);
     const last = rows.bars.at(-1)?.c;
+    // Solo el precio en el eje, sin título: una etiqueta con texto era más ancha
+    // que la escala y tapaba sus cifras. Qué es cada línea lo dice la leyenda.
+    // lightweight-charts no dibuja el título si se oculta la etiqueta del eje.
     const made = watches.map((w) =>
       x.candles.createPriceLine({
         price: w.price,
@@ -434,7 +443,7 @@ export function DailyChart(p: {
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: narrow ? "" : `Vigilancia ${w.operator === "lte" ? "≤" : "≥"}`,
+        title: "",
       }),
     );
     if (entry && Number.isFinite(entry))
@@ -445,7 +454,7 @@ export function DailyChart(p: {
           lineWidth: 2,
           lineStyle: LineStyle.Dotted,
           axisLabelVisible: true,
-          title: narrow ? "" : "Entrada",
+          title: "",
         }),
       );
     lines.current = made;
@@ -611,7 +620,7 @@ export function DailyChart(p: {
             {position && (
               <span>
                 <i className="mk-key entry" aria-hidden="true" />
-                Precio de entrada
+                {short ? "Precio de entrada del corto" : "Precio de entrada"}
               </span>
             )}
             <span>▲ compra · ▼ venta · ● vigilancia cerrada</span>

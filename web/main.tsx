@@ -25,6 +25,7 @@ import {
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import type { Decision } from "../src/domain";
+import { riskProfileOf } from "../src/risk";
 import { money, date, marketOpen, marketText } from "./shared";
 import { Badge, Chip, Hint } from "./ui";
 import { Market } from "./market";
@@ -451,6 +452,17 @@ function App() {
                 <i aria-hidden />
                 {agent.text}
               </span>
+            </Hint>
+            <Hint
+              label={`Revisa el mercado cada ${riskProfileOf(s.settings).scanEveryMinutes} min como máximo. Se cambia en Configuración.`}
+            >
+              <button
+                type="button"
+                className="pill risk"
+                onClick={() => setTab("Configuración")}
+              >
+                Riesgo {riskProfileOf(s.settings).label}
+              </button>
             </Hint>
             <span className="badge sim">Solo simulación</span>
           </div>

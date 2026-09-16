@@ -2,6 +2,7 @@
 // ni salida: recibe el estado y devuelve texto, o null si no hay nada que contar.
 import { escapeHtml } from "./telegram.ts";
 import type { State, Decision } from "./domain.ts";
+import { tradeName, type OrderIntent } from "./risk.ts";
 export type Notice = { kind: string; text: string };
 // Una decisión de seguir esperando no se cuenta cada vez, aunque el agente lo
 // pida: sin este freno el bot repetiría lo mismo varias veces por hora.
@@ -20,6 +21,16 @@ const titulo: Record<string, string> = {
   sell: "🔴 VENTA",
   wait: "⚪ Sin operar",
 };
+// Con cortos no basta con comprar y vender: una venta puede abrir un corto y una
+// compra, recomprarlo. La intención se calcula al decidir; una decisión anterior
+// a ese campo se nombra por su acción, como antes.
+const tituloIntencion: Partial<Record<OrderIntent, string>> = {
+  open_short: "🔻 VENTA EN CORTO",
+  add_short: "🔻 VENTA EN CORTO",
+  reduce_short: "🔺 RECOMPRA",
+  close_short: "🔺 RECOMPRA",
+};
+const nombre = (d: Decision) => tradeName(d.intent, d.proposal.action);
 const estados: Record<string, string> = {
   filled: "ejecutada",
   partially_filled: "ejecutada en parte",
@@ -84,10 +95,12 @@ export function decisionNotice(
   }
   const cabecera = bloqueada
     ? `🚫 NO SE ENVIÓ · ${escapeHtml(p.symbol ?? "")}`
-    : `${titulo[p.action] ?? p.action}${p.symbol ? ` · ${escapeHtml(p.symbol)}` : ""}`;
+    : `${(d.intent && tituloIntencion[d.intent]) ?? titulo[p.action] ?? p.action}${p.symbol ? ` · ${escapeHtml(p.symbol)}` : ""}`;
+  // Un precio límite es el máximo que se paga al comprar y el mínimo que se
+  // acepta al vender, también en corto.
   const cuanto =
     opera && p.qty && p.limitPrice
-      ? `\n${p.qty} ${p.qty === 1 ? "acción" : "acciones"} a ${money(p.limitPrice)} como máximo`
+      ? `\n${p.qty} ${p.qty === 1 ? "acción" : "acciones"} a ${money(p.limitPrice)} como ${p.action === "buy" ? "máximo" : "mínimo"}`
       : "";
   const motivo = bloqueada
     ? `\n\n<b>Motivo del bloqueo:</b> ${escapeHtml(d.error!)}`
@@ -115,14 +128,19 @@ export function orderNotice(
   const icono =
     estado === "filled" ? "✅" : estado === "rejected" ? "⛔" : "↩️";
   const pos = s.positions.find((x) => x.symbol === p.symbol);
-  const cartera = pos
-    ? `\n\nAhora tienes ${pos.qty} de ${escapeHtml(p.symbol ?? "")}, valen ${money(pos.market_value)} (${money(pos.unrealized_pl)} sin realizar).`
-    : "";
+  // En Alpaca una posición corta tiene qty y valor negativos. «Tienes -10» no se
+  // entiende: se dice cuántas se deben.
+  const corta = pos && Number(pos.qty) < 0;
+  const cartera = !pos
+    ? ""
+    : corta
+      ? `\n\nAhora debes ${Math.abs(Number(pos.qty))} de ${escapeHtml(p.symbol ?? "")} (posición corta), valen ${money(Math.abs(Number(pos.market_value)))} (${money(pos.unrealized_pl)} sin realizar).`
+      : `\n\nAhora tienes ${pos.qty} de ${escapeHtml(p.symbol ?? "")}, valen ${money(pos.market_value)} (${money(pos.unrealized_pl)} sin realizar).`;
   return {
     kind: "orden",
     text:
       `<b>${icono} Orden ${estados[estado] ?? escapeHtml(estado)} · ${escapeHtml(p.symbol ?? "")}</b>\n` +
-      `${p.action === "buy" ? "Compra" : "Venta"} de ${p.qty} a ${money(p.limitPrice)}` +
+      `${nombre(d)} de ${p.qty} a ${money(p.limitPrice)}` +
       cartera +
       `\n\nEfectivo: ${money(s.account?.cash)} · Patrimonio: ${money(s.account?.equity)}`,
   };
@@ -139,7 +157,7 @@ export function reviewNotice(s: State, d: Decision): Notice | null {
   return {
     kind: "revision",
     text:
-      `<b>📋 Revisión · ${escapeHtml(d.proposal.symbol ?? "")}</b>${movimiento}\n\n` +
+      `<b>📋 Revisión · ${nombre(d)} · ${escapeHtml(d.proposal.symbol ?? "")}</b>${movimiento}\n\n` +
       escapeHtml(d.review.text),
   };
 }

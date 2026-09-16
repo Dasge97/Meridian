@@ -22,6 +22,8 @@ import {
   enqueue,
   watchProblem,
   adoptLessons,
+  riskProfileOf,
+  settingsUpdate,
   UserError,
 } from "./domain.ts";
 import { configured, alpaca, AlpacaError } from "./alpaca.ts";
@@ -242,13 +244,22 @@ app.post("/api/wake", async () => {
   return { ok: true };
 });
 app.put("/api/settings", async (req) => {
+  // Se valida antes de leer la base de datos.
   const settings = settingsSchema.parse(req.body);
   await change((s) => {
-    s.settings = settings;
+    const antes = riskProfileOf(s.settings);
+    s.settings = settingsUpdate(s.settings, req.body);
     for (const w of s.watches)
       if (w.status === "active" && !settings.symbols.includes(w.symbol))
         w.status = "cancelled";
     log(s, "config", "Límites actualizados por el propietario");
+    const despues = riskProfileOf(s.settings);
+    if (despues.key !== antes.key)
+      log(
+        s,
+        "config",
+        `Nivel de riesgo: ${antes.label} → ${despues.label}. ${despues.description}`,
+      );
   });
   return { ok: true };
 });

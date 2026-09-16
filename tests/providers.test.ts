@@ -277,11 +277,20 @@ test("A model call reports what it spent and how big each part of the context wa
         lessonsOmitted: context.lessonsOmitted,
       }).length,
     );
-    const { event, at, settings, clock, account, positions, quotes } = context;
+    const { event, at, settings, risk, clock, account, positions, quotes } =
+      context;
     assert.equal(
       sections!.portfolio,
-      JSON.stringify({ event, at, settings, clock, account, positions, quotes })
-        .length,
+      JSON.stringify({
+        event,
+        at,
+        settings,
+        risk,
+        clock,
+        account,
+        positions,
+        quotes,
+      }).length,
     );
 
     s.decisions = [

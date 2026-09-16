@@ -1,7 +1,7 @@
 import pg from "pg";
 import {
-  initialState,
   prune,
+  restoreState,
   hotKeys,
   coldKeys,
   type State,
@@ -39,7 +39,7 @@ export async function migrate() {
     ).rows;
     const stored = new Map<number, any>(rows.map((r) => [r.id, r.data]));
     // A single row from the first release still holds the whole document.
-    const parts = split({ ...initialState(), ...(stored.get(HOT) ?? {}) });
+    const parts = split(restoreState([stored.get(HOT) ?? {}]));
     for (const id of ROWS)
       if (!stored.has(id))
         await c.query("INSERT INTO meridian_state(id,data) VALUES($1,$2)", [
@@ -64,8 +64,8 @@ function assemble(rows: { id: number; data: any }[]): State {
     throw new Error("Estado incompleto: ejecuta la migración");
   // Un estado guardado antes de que existiera un campo no lo trae. Partir de los
   // valores iniciales hace que cualquier campo nuevo aparezca ya con su valor
-  // por defecto, sin migrar nada a mano.
-  return Object.assign({}, initialState(), ...rows.map((r) => r.data));
+  // por defecto, sin migrar nada a mano. También dentro de los ajustes.
+  return restoreState(rows.map((r) => r.data));
 }
 export async function read(): Promise<State> {
   return assemble(

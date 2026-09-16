@@ -96,6 +96,28 @@ test("HTTP security: login, signed cookies, route protection, Origin and static 
       ).statusCode,
       400,
     );
+    // Un nivel de riesgo que no existe se rechaza antes de leer la base de datos.
+    assert.equal(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/settings",
+          headers,
+          payload: {
+            symbols: ["SPY"],
+            maxOrderUsd: 600,
+            maxPositionUsd: 1200,
+            maxExposureUsd: 2000,
+            maxDailyOrders: 5,
+            maxDailyCalls: 20,
+            maxDrawdownPct: 10,
+            cooldownSeconds: 300,
+            riskProfile: "temerario",
+          },
+        })
+      ).statusCode,
+      400,
+    );
     // Los parámetros se validan antes de leer la base de datos.
     for (const [url, message] of [
       ["/api/decisions?size=101", /tamaño de página/],

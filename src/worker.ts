@@ -16,7 +16,15 @@ import {
   ModelFailure,
   type Spent,
 } from "./model.ts";
-import { log, now, limitPriceString, type Quote } from "./domain.ts";
+import {
+  log,
+  now,
+  limitPriceString,
+  assetProblem,
+  INTENT_LABELS,
+  type AssetInfo,
+  type Quote,
+} from "./domain.ts";
 import {
   analyse,
   intradaySummary,
@@ -159,18 +167,34 @@ async function reconcileStep() {
 async function submitStep() {
   const intent = await change((s) => claimIntent(s, sessionOpen(s)));
   if (!intent) return;
+  const p = intent.proposal;
+  // Consultar el activo no envía nada. Si falla, la orden no ha salido: se
+  // bloquea con el motivo en lugar de pausar el agente como con un envío incierto.
+  let asset: AssetInfo;
   try {
-    const p = intent.proposal;
-    const asset = await alpaca("/v2/assets/" + p.symbol);
-    if (!asset.tradable || asset.status !== "active") {
-      await change((s) => {
-        const d = s.decisions.find((x) => x.id === intent.id);
-        if (!d) return;
-        d.status = "blocked";
-        d.error = "Activo no negociable";
-      });
-      return;
-    }
+    asset = await alpaca("/v2/assets/" + p.symbol);
+  } catch (e) {
+    await change((s) => {
+      const d = s.decisions.find((x) => x.id === intent.id);
+      if (!d) return;
+      d.status = "blocked";
+      d.error = `No se pudo consultar el activo en Alpaca: ${describeFailure(e)}`;
+    });
+    return;
+  }
+  // Negociable y, si abre o amplía un corto, con acciones para pedir prestadas.
+  // El resto de comprobaciones de orderGuard ya las pasó claimIntent.
+  const problema = assetProblem(asset, intent.intent);
+  if (problema) {
+    await change((s) => {
+      const d = s.decisions.find((x) => x.id === intent.id);
+      if (!d) return;
+      d.status = "blocked";
+      d.error = problema;
+    });
+    return;
+  }
+  try {
     const order = await alpaca("/v2/orders", "POST", {
       symbol: p.symbol,
       qty: String(p.qty),
@@ -186,7 +210,11 @@ async function submitStep() {
       if (!d) return null;
       d.status = order.status;
       d.orderId = order.id;
-      log(s, "order", `Orden enviada a Alpaca Paper: ${p.symbol}`);
+      log(
+        s,
+        "order",
+        `Orden enviada a Alpaca Paper: ${d.intent ? `${INTENT_LABELS[d.intent]} de ` : ""}${p.symbol}`,
+      );
       return orderNotice(s, d, order.status);
     });
     await notify(aviso);

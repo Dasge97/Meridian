@@ -516,3 +516,25 @@ dl.dc-ids dd {
     padding: 18px 16px 32px;
   }
 }
+
+/* Operaciones en corto: el icono cambia de forma y lleva el borde discontinuo. */
+.dc-icon.short {
+  border: 1px dashed currentColor;
+}
+.dc-action.short {
+  font-weight: 600;
+  color: var(--ink);
+}
+.dc-short-note {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px dashed var(--line-2);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.dc-short-note b {
+  color: var(--ink);
+}

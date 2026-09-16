@@ -18,6 +18,7 @@ import {
   type Range,
 } from "../listing";
 import { Counter, versionNumbers } from "./settings-counter";
+import { decisionType } from "./decisions-intent";
 import "./learning.css";
 
 // Mismo tope que MAX_ACTIVE_LESSONS en src/domain.ts.
@@ -30,11 +31,21 @@ const TABS: [Lesson["status"] | "all", string][] = [
   ["all", "Todas"],
 ];
 
+// Las revisiones guardan como fuente el identificador de la decisión: no dice
+// nada a quien lo lee.
+const isId = (text: string) => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(text.trim());
+// Mismo nombre que en Decisiones: con cortos, «Venta en corto» o «Recompra».
+function decisionLabel(d: ViewProps["s"]["decisions"][number]) {
+  return `${decisionType(d).text} · ${d.proposal.symbol ?? "mercado"} · ${date(d.at)}`;
+}
 function LessonCard({ l, p }: { l: Lesson; p: ViewProps }) {
   const { s, busy, act } = p;
   const origin = l.decisionId
     ? s.decisions.find((d) => d.id === l.decisionId)
     : undefined;
+  const source = isId(l.source)
+    ? "Revisión de una operación del agente"
+    : l.source;
   const numbers = versionNumbers(s.versions);
   const inVersions = s.versions.filter((v) => v.lessonIds.includes(l.id));
   const active = s.lessons.filter((x) => x.status === "accepted").length;
@@ -49,7 +60,7 @@ function LessonCard({ l, p }: { l: Lesson; p: ViewProps }) {
       <dl className="ln-meta">
         <div>
           <dt>Fuente</dt>
-          <dd className="source">{l.source}</dd>
+          <dd className="source">{source}</dd>
         </div>
         {l.decisionId && (
           <div>
@@ -61,7 +72,7 @@ function LessonCard({ l, p }: { l: Lesson; p: ViewProps }) {
                   className="link ln-origin"
                   onClick={() => p.openDecision(origin)}
                 >
-                  {origin.event} · {date(origin.at)}
+                  {decisionLabel(origin)}
                   <ArrowUpRight size={14} aria-hidden />
                 </button>
               ) : (

@@ -27,6 +27,7 @@ import { Chip, Sparkline, Meter, Hint } from "../ui";
 import { EquityChart } from "./summary-chart";
 import { EventItem } from "./summary-activity";
 import { EventLog } from "./events";
+import { riskProfileOf } from "../../src/risk";
 import "./summary.css";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -77,7 +78,7 @@ function Kpis({ s, goTo }: { s: Data; goTo: (tab: string) => void }) {
       <div className="sm-kpi">
         <span className="sm-kpi-label">
           Exposición
-          <Hint label="Suma del valor de las posiciones abiertas frente al límite de exposición. Las compras pendientes también cuentan para el límite y no están aquí.">
+          <Hint label="Suma del valor de las posiciones abiertas frente al límite de exposición. Las cortas cuentan en positivo. Las compras pendientes también cuentan para el límite y no están aquí.">
             <button
               type="button"
               className="sm-info"
@@ -154,7 +155,8 @@ function AgentState({ s }: { s: Data }) {
       s.heartbeat && Date.now() - Date.parse(s.heartbeat) < 120000,
     ),
     job = s.modelJob,
-    open = marketOpen(s);
+    open = marketOpen(s),
+    risk = riskProfileOf(s.settings);
   const state: {
     key: string;
     title: string;
@@ -218,13 +220,22 @@ function AgentState({ s }: { s: Data }) {
       <dl className="sm-facts">
         <div>
           <dt>Conexión de mercado</dt>
-          <dd className={s.stream === "connected" ? "ok" : "bad"}>
+          {/* Con la bolsa cerrada no llegan precios: no es un fallo. */}
+          <dd
+            className={
+              s.stream === "connected" ? "ok" : open ? "bad" : undefined
+            }
+          >
             {s.stream === "connected" ? (
               <Wifi size={14} aria-hidden />
             ) : (
               <WifiOff size={14} aria-hidden />
             )}
-            {s.stream === "connected" ? "Conectada" : "Sin señal reciente"}
+            {s.stream === "connected"
+              ? "Conectada"
+              : open
+                ? "Sin señal reciente"
+                : "En pausa hasta la apertura"}
           </dd>
         </div>
         <div>
@@ -234,6 +245,13 @@ function AgentState({ s }: { s: Data }) {
               <i aria-hidden="true" />
             </span>
             <span>{marketText(s)}</span>
+          </dd>
+        </div>
+        <div>
+          <dt>Nivel</dt>
+          <dd>
+            {risk.label} · revisa cada{" "}
+            <span className="num">{risk.scanEveryMinutes}</span> min
           </dd>
         </div>
         <div>
@@ -294,10 +312,13 @@ function Positions({ s }: { s: Data }) {
       (a, b) =>
         Math.abs(Number(b.market_value)) - Math.abs(Number(a.market_value)),
     ),
+    // Alpaca da los cortos con unidades y valor negativos.
+    isShort = (x: (typeof rows)[number]) =>
+      x.side === "short" || Number(x.qty) < 0,
     parts = [
       ...rows.map((x, i) => ({
         key: x.symbol as string,
-        label: x.symbol as string,
+        label: (x.symbol as string) + (isShort(x) ? " corto" : ""),
         value: Math.abs(Number(x.market_value) || 0),
         cls: "sm-seg-" + (i % 6),
       })),
@@ -365,14 +386,18 @@ function Positions({ s }: { s: Data }) {
             </thead>
             <tbody>
               {rows.map((x) => {
-                const pl = Number(x.unrealized_pl);
+                const pl = Number(x.unrealized_pl),
+                  short = isShort(x);
                 return (
                   <tr key={x.symbol}>
                     <th scope="row">
-                      <span className="symbol-tag">{x.symbol}</span>
+                      <span className="sm-asset">
+                        <span className="symbol-tag">{x.symbol}</span>
+                        {short && <span className="badge sm-short">Corto</span>}
+                      </span>
                     </th>
                     <td data-label="Unidades" className="num">
-                      {x.qty}
+                      {short ? Math.abs(Number(x.qty)) : x.qty}
                     </td>
                     <td data-label="Precio de entrada" className="num">
                       {money(x.avg_entry_price)}
@@ -381,7 +406,7 @@ function Positions({ s }: { s: Data }) {
                       {money(x.current_price)}
                     </td>
                     <td data-label="Valor" className="num">
-                      {money(x.market_value)}
+                      {money(Math.abs(Number(x.market_value)))}
                     </td>
                     <td data-label="Peso" className="num">
                       {share(Math.abs(Number(x.market_value)), equity)}

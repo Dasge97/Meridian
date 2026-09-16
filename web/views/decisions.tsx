@@ -18,12 +18,12 @@ import {
 import {
   ActionIcon,
   ReviewLine,
-  actionText,
   amount,
   needsReconcile,
   orderText,
   wasSent,
 } from "./decisions-parts";
+import { decisionType } from "./decisions-intent";
 import "./decisions.css";
 
 const kinds: [DecisionKind, string][] = [
@@ -57,20 +57,23 @@ function dayLabel(at: string) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// Cuenta por tipo en el orden en que aparecen: «2 compras · 1 venta en corto».
 function daySummary(list: Decision[]) {
-  const n = (a: string) => list.filter((d) => d.proposal.action === a).length;
-  return [
-    [n("buy"), "compra", "compras"],
-    [n("sell"), "venta", "ventas"],
-    [n("wait"), "espera", "esperas"],
-  ]
-    .filter(([c]) => c)
-    .map(([c, one, many]) => `${c} ${c === 1 ? one : many}`)
+  const counts = new Map<string, { n: number; one: string; many: string }>();
+  for (const d of list) {
+    const t = decisionType(d),
+      c = counts.get(t.key);
+    if (c) c.n++;
+    else counts.set(t.key, { n: 1, one: t.one, many: t.many });
+  }
+  return [...counts.values()]
+    .map((c) => `${c.n} ${c.n === 1 ? c.one : c.many}`)
     .join(" · ");
 }
 
 function Row({ d, onOpen }: { d: Decision; onOpen: () => void }) {
   const p = d.proposal,
+    type = decisionType(d),
     order = orderText(d),
     total = amount(d);
   return (
@@ -80,10 +83,12 @@ function Row({ d, onOpen }: { d: Decision; onOpen: () => void }) {
         className={"dc-row" + (needsReconcile(d) ? " attn" : "")}
         onClick={onOpen}
       >
-        <ActionIcon action={p.action} />
+        <ActionIcon d={d} />
         <span className="dc-head">
           <strong className="dc-sym">{p.symbol || "Mercado"}</strong>
-          <span className="dc-action">{actionText[p.action]}</span>
+          <span className={"dc-action" + (type.short ? " short" : "")}>
+            {type.text}
+          </span>
         </span>
         <span className="dc-text">{p.note || p.reason}</span>
         <span className="dc-meta">
@@ -229,6 +234,18 @@ export function Decisions(p: ViewProps) {
     blocked = recent.filter((d) => d.status === "blocked").length,
     pendingFix = recent.filter(needsReconcile).length;
 
+  // El filtro va por la dirección de la orden. Con cortos, «Compras» también
+  // recoge las recompras y «Ventas» las ventas en corto: la etiqueta lo dice.
+  const shorts = s.decisions.some((d) => decisionType(d).short);
+  const kindLabel = (k: DecisionKind, label: string) =>
+    !shorts
+      ? label
+      : k === "buy"
+        ? "Compras y recompras"
+        : k === "sell"
+          ? "Ventas y cortos"
+          : label;
+
   const symbols =
     symbol && !s.settings.symbols.includes(symbol)
       ? [...s.settings.symbols, symbol]
@@ -344,7 +361,7 @@ export function Decisions(p: ViewProps) {
                   setPage(1);
                 }}
               >
-                {label} {n !== undefined && <small>{n}</small>}
+                {kindLabel(k, label)} {n !== undefined && <small>{n}</small>}
               </button>
             );
           })}

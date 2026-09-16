@@ -625,3 +625,16 @@ dl.sm-facts {
     padding-top: 0;
   }
 }
+
+/* Posición corta: la etiqueta lo dice, el color no va solo. */
+.sm-asset {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.badge.sm-short {
+  padding: 2px 7px;
+  font-weight: 600;
+  color: var(--warn);
+  background: var(--warn-soft);
+}

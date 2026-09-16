@@ -9,6 +9,7 @@ import type { ViewProps } from "./types";
 import { date } from "../shared";
 import { Confirm } from "../ui";
 import { Limits } from "./settings-limits";
+import { Risk, riskOf } from "./settings-risk";
 import { Instructions } from "./settings-instructions";
 import { Versions } from "./settings-versions";
 import "./settings.css";
@@ -95,7 +96,13 @@ export function SettingsView(p: ViewProps) {
       </section>
       <div className="st-layout">
         <div className="st-main">
-          <Limits key={JSON.stringify(s.settings)} {...p} />
+          {/* Cada bloque se reinicia solo cuando cambia lo suyo: aplicar un nivel
+              no borra los límites a medio editar, ni al revés. */}
+          <Risk key={riskOf(s.settings)} {...p} />
+          <Limits
+            key={JSON.stringify({ ...s.settings, riskProfile: undefined })}
+            {...p}
+          />
           <Instructions {...p} />
         </div>
         <div className="st-side">

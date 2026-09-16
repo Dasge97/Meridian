@@ -173,7 +173,7 @@ test("Only decisions that sent an order are reviewed", () => {
   claimJob(s, true);
   assert.equal(s.decisions.at(-1)!.reviewSkipped, undefined, "aún no le toca");
 });
-test("The market is scanned every half hour during the session", () => {
+test("The market is scanned periodically during the session", () => {
   // Lunes 14 de septiembre de 2026 a las 11:00 en Nueva York.
   const T = Date.parse("2026-09-14T15:00:00Z");
   const hace = (minutos: number) => new Date(T - minutos * 60000).toISOString();

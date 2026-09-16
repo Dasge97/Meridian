@@ -15,10 +15,10 @@ import { Badge, Chip, Confirm, Group, Sheet, Stat } from "../ui";
 import {
   ActionIcon,
   ReviewLine,
-  actionText,
   amount,
   needsReconcile,
 } from "./decisions-parts";
+import { decisionType, intentOf, shortNote } from "./decisions-intent";
 import "./decisions.css";
 
 function Context({
@@ -93,6 +93,8 @@ export function DecisionDetail(p: {
   // El estado se refresca cada 5 s: se enseña la versión más reciente.
   const d = s.decisions.find((x) => x.id === p.selected.id) ?? p.selected;
   const pr = d.proposal,
+    type = decisionType(d),
+    intent = intentOf(d),
     total = amount(d),
     fromEntry =
       d.review?.price && pr.limitPrice
@@ -107,8 +109,8 @@ export function DecisionDetail(p: {
       onOpenChange={(open) => !open && setSelected(null)}
       title={
         <span className="dc-sheet-title">
-          <ActionIcon action={pr.action} size={20} />
-          {actionText[pr.action]} · {pr.symbol || "Mercado"}
+          <ActionIcon d={d} size={20} />
+          {type.text} · {pr.symbol || "Mercado"}
         </span>
       }
       subtitle={
@@ -171,6 +173,12 @@ export function DecisionDetail(p: {
               </div>
             </div>
           </div>
+        )}
+
+        {intent && shortNote[intent] && (
+          <p className="dc-short-note">
+            <b>Posición corta.</b> {shortNote[intent]}
+          </p>
         )}
 
         {d.error && (

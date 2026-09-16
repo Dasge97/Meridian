@@ -10,6 +10,10 @@ import {
   USAGE_EVENT_CHARS,
   USAGE_ERROR_CHARS,
   adoptLessons,
+  proposalIntent,
+  riskProfileOf,
+  sameMeaning,
+  tradeName,
   type State,
   type Usage,
   type Decision,
@@ -145,14 +149,22 @@ export function claimIntent(s: State, marketOpen: boolean, t = Date.now()) {
   const d = s.decisions.find((x) => x.status === "pending");
   if (!d) return null;
   const shadow = { ...s, decisions: s.decisions.filter((x) => x.id !== d.id) };
+  // Entre la decisión y el envío puede ejecutarse otra orden. Una venta pensada
+  // para cerrar un largo que ya no existe abriría un corto: eso ya no es lo que
+  // decidió el agente, y no se envía.
+  const ahora = proposalIntent(s, d.proposal);
   const error = !marketOpen
     ? "Mercado cerrado"
-    : orderGuard(shadow, d.proposal, t);
+    : (orderGuard(shadow, d.proposal, t) ??
+      (d.intent && ahora && !sameMeaning(d.intent, ahora)
+        ? "Las posiciones cambiaron desde la decisión y la orden ya no significa lo mismo"
+        : null));
   if (error) {
     d.status = "blocked";
     d.error = error;
     return null;
   }
+  if (ahora) d.intent = ahora;
   d.status = "submitting";
   d.sentAt = new Date(t).toISOString();
   return structuredClone(d);
@@ -318,6 +330,10 @@ export function applyDecision(
     error: error ?? undefined,
     reviewAt: new Date(t + p.reviewAfterHours * 3600000).toISOString(),
   };
+  // Con las posiciones de ahora, no con las que vio el modelo: es lo que se
+  // enviaría. Queda sin intención si cruza de largo a corto.
+  const intent = proposalIntent(s, p);
+  if (intent) d.intent = intent;
   s.decisions.push(d);
   s.usage.push(
     usageRecord(job, result.spent ?? { tokens: result.tokens }, t, {
@@ -387,7 +403,7 @@ export function applyReview(
   adoptLessons(
     s,
     parsed.lessons.map((l) => ({ ...l, decisionId: due.id })),
-    `Lecciones de la revisión de ${due.proposal.action === "buy" ? "la compra" : "la venta"} de ${due.proposal.symbol ?? "un activo"}`,
+    `Lecciones de la revisión de la ${tradeName(due.intent, due.proposal.action).toLowerCase()} de ${due.proposal.symbol ?? "un activo"}`,
     t,
   );
   s.modelJob = null;
@@ -431,14 +447,36 @@ export function applyIntraday(s: State, fresh: Record<string, Intraday>) {
   }
   s.intraday = kept;
 }
-export const SCAN_EVERY_MINUTES = 30,
-  SCAN_START_AFTER_OPEN_MINUTES = 10,
+export const SCAN_START_AFTER_OPEN_MINUTES = 10,
   SCAN_STOP_BEFORE_CLOSE_MINUTES = 15,
+  SCAN_RESERVED_CALLS = 3,
   SCAN_REASON = "Revisión periódica del mercado";
-// Con la sesión abierta, el agente mira el mercado al menos cada 30 minutos
-// aunque no haya noticias ni vigilancias. Antes solo se despertaba por eventos y
-// podía pasar la sesión entera sin evaluar nada. Cerca del cierre no se abre
-// una operación que no daría tiempo a gestionar.
+// Cada cuántos minutos toca la revisión periódica, o null si ya no queda
+// presupuesto para ella. El ritmo lo marca el nivel de riesgo, pero nunca tan
+// deprisa que las llamadas del día se acaben antes del cierre: con el límite de
+// 20 llamadas, revisar cada 10 minutos lo agotaba hacia la una de la tarde en
+// Nueva York, y una vigilancia cumplida después ya no se podía evaluar. Por eso
+// se reservan unas pocas llamadas para vigilancias, órdenes ejecutadas y
+// revisiones, y el resto se reparte hasta el final de la sesión.
+export function scanEveryMinutes(s: State, t = Date.now()) {
+  const base = riskProfileOf(s.settings).scanEveryMinutes;
+  const hoy = new Date(t).toISOString().slice(0, 10);
+  const usadas = s.calls.day === hoy ? s.calls.count : 0;
+  const reserva = Math.min(
+    SCAN_RESERVED_CALLS,
+    Math.floor(s.settings.maxDailyCalls / 5),
+  );
+  const libres = s.settings.maxDailyCalls - usadas - reserva;
+  if (libres <= 0) return null;
+  const cierre = Date.parse(s.market.nextClose ?? "");
+  if (!Number.isFinite(cierre)) return base;
+  const quedan = (cierre - t) / 60000 - SCAN_STOP_BEFORE_CLOSE_MINUTES;
+  return Math.max(base, Math.ceil(quedan / libres));
+}
+// Con la sesión abierta, el agente mira el mercado cada pocos minutos, según el
+// nivel de riesgo, aunque no haya noticias ni vigilancias. Antes solo se
+// despertaba por eventos y podía pasar la sesión entera sin evaluar nada. Cerca
+// del cierre no se abre una operación que no daría tiempo a gestionar.
 export function queueSessionScan(s: State, t = Date.now()) {
   if (s.paused || s.queue.length || !sessionOpen(s, t)) return false;
   // En los primeros minutos todavía no hay velas de la sesión, y la evaluación
@@ -447,10 +485,9 @@ export function queueSessionScan(s: State, t = Date.now()) {
     return false;
   const cierre = Date.parse(s.market.nextClose!);
   if (cierre - t < SCAN_STOP_BEFORE_CLOSE_MINUTES * 60000) return false;
-  if (
-    s.lastDecision &&
-    t - Date.parse(s.lastDecision) < SCAN_EVERY_MINUTES * 60000
-  )
+  const cada = scanEveryMinutes(s, t);
+  if (cada === null) return false;
+  if (s.lastDecision && t - Date.parse(s.lastDecision) < cada * 60000)
     return false;
   enqueue(s, SCAN_REASON, "periodic");
   return true;
@@ -470,12 +507,23 @@ export function applyNews(s: State, raw: unknown[], t = Date.now()) {
   // gastaba una llamada para decir que espera. Las noticias se guardan y se
   // comentan juntas antes de la apertura. Sin calendario no se sabe si está
   // cerrada, y se prefiere no perder la noticia.
-  const despertar = sessionOpen(s, t) || !s.feeds.clock;
+  // En los niveles activo y agresivo tampoco despiertan con la bolsa abierta. El
+  // 16/09/2026 casi todas las evaluaciones las provocaba una tanda de noticias, y
+  // en cada una el agente repasaba su única posición para decir que seguía
+  // igual. Las pendientes llevan ref en el contexto y se comentan en la
+  // siguiente revisión periódica, que en esos niveles es la más frecuente.
+  const abierta = sessionOpen(s, t);
+  const despertar =
+    (abierta && riskProfileOf(s.settings).newsWakesAgent) || !s.feeds.clock;
   log(
     s,
     "news",
     summarise(fresh) +
-      (despertar ? "" : ". Bolsa cerrada: se comentarán antes de la apertura."),
+      (despertar
+        ? ""
+        : abierta
+          ? ". Se comentarán en la próxima revisión."
+          : ". Bolsa cerrada: se comentarán antes de la apertura."),
   );
   if (!s.paused && despertar) enqueue(s, summarise(fresh), "news");
   return fresh.length;
@@ -488,7 +536,12 @@ export function queueNewsBeforeOpen(s: State, t = Date.now()) {
   // El cierre de la próxima sesión la identifica tanto antes como durante ella.
   const sesion = s.market.nextClose;
   if (!sesion || s.preOpenNews === sesion) return false;
-  if (!sessionOpen(s, t)) {
+  if (sessionOpen(s, t)) {
+    // Si las noticias no despiertan al agente, con la bolsa abierta tampoco lo
+    // hace este repaso: contaría como pendientes las llegadas durante la sesión.
+    // Las de la noche se comentan en la primera revisión periódica.
+    if (!riskProfileOf(s.settings).newsWakesAgent) return false;
+  } else {
     const apertura = s.market.nextOpen ? Date.parse(s.market.nextOpen) : NaN;
     const faltan = (apertura - t) / 60000;
     if (!(faltan > 0 && faltan <= PRE_OPEN_MINUTES)) return false;

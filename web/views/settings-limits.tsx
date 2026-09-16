@@ -4,8 +4,10 @@ import type { Settings } from "../../src/domain";
 import type { Data, ViewProps } from "./types";
 import { money, num, pct } from "../shared";
 import { Group, Meter } from "../ui";
+import { riskOf } from "./settings-risk";
 
-type Key = Exclude<keyof Settings, "symbols">;
+// riskProfile no es una cifra: lo edita su propio bloque.
+type Key = Exclude<keyof Settings, "symbols" | "riskProfile">;
 type Usage = { value: number; text: (limit: number) => string };
 type Field = {
   k: Key;
@@ -64,7 +66,7 @@ const GROUPS: { title: string; note: string; fields: Field[] }[] = [
         unit: "USD",
         min: 1,
         max: 100000,
-        hint: "Suma de todas las posiciones.",
+        hint: "Suma de todas las posiciones. Las cortas cuentan en positivo.",
         usage: (s) => {
           const value = s.positions.reduce(
             (a, x) => a + Math.abs(Number(x.market_value)),
@@ -267,7 +269,12 @@ export function Limits(p: ViewProps) {
       className="panel st-limits"
       onSubmit={(e) => {
         e.preventDefault();
-        const body: Record<string, unknown> = { symbols };
+        // El servidor sustituye la configuración entera: el nivel guardado
+        // viaja con los límites para no perderlo.
+        const body: Record<string, unknown> = {
+          symbols,
+          riskProfile: riskOf(s.settings),
+        };
         for (const k of Object.keys(values) as Key[])
           body[k] = Number(values[k]);
         act("/settings", body, "PUT");

@@ -1,6 +1,15 @@
 import { z } from "zod";
 import type { Analysis, Intraday } from "./market.ts";
 import type { Story } from "./news.ts";
+import {
+  RISK_PROFILE_KEYS,
+  DEFAULT_RISK_PROFILE,
+  riskProfileOf,
+  orderIntent,
+  opensRisk,
+  type OrderIntent,
+} from "./risk.ts";
+export * from "./risk.ts";
 export const settingsSchema = z.object({
   symbols: z
     .array(z.string().regex(/^[A-Z]{1,5}$/))
@@ -13,6 +22,9 @@ export const settingsSchema = z.object({
   maxDailyCalls: z.number().int().min(1).max(200),
   maxDrawdownPct: z.number().min(1).max(50),
   cooldownSeconds: z.number().int().min(60).max(86400),
+  // Un estado guardado antes de existir el nivel no lo trae y vale el de por
+  // defecto. PUT /api/settings conserva el actual si la petición no lo envía.
+  riskProfile: z.enum(RISK_PROFILE_KEYS).default(DEFAULT_RISK_PROFILE),
 });
 export const watchSchema = z.object({
   symbol: z.string().regex(/^[A-Z]{1,5}$/),
@@ -80,6 +92,15 @@ export const proposalSchema = z.object({
   lessons: z.array(lessonSchema).max(3).default([]),
 });
 export type Settings = z.infer<typeof settingsSchema>;
+// Los ajustes que envía el panel. Un formulario que no conoce el nivel de riesgo
+// no lo envía, y guardar los límites no debe devolverlo al de por defecto sin
+// que nadie lo pida: si falta, se conserva el actual.
+export function settingsUpdate(current: Settings, body: unknown): Settings {
+  const next = settingsSchema.parse(body);
+  const trae =
+    typeof body === "object" && body !== null && "riskProfile" in body;
+  return trae ? next : { ...next, riskProfile: riskProfileOf(current).key };
+}
 export type Watch = z.infer<typeof watchSchema> & {
   id: string;
   status: "active" | "triggered" | "expired" | "cancelled" | "invalidated";
@@ -119,6 +140,10 @@ export type Decision = {
   reviewSkipped?: string;
   // Comentarios ya emparejados con su noticia, para el panel y para el aviso.
   newsCommented?: { storyId: string; comment: string; matters: boolean }[];
+  // Qué significa la orden con las posiciones de cuando se decidió: compra,
+  // venta, venta en corto o recompra. Solo en compras y ventas que no cruzan de
+  // largo a corto; las decisiones anteriores a este campo no lo traen.
+  intent?: OrderIntent;
 };
 export const USAGE_TRIGGERS = [
   "watch",
@@ -235,6 +260,7 @@ export function initialState(): State {
       maxDailyCalls: 20,
       maxDrawdownPct: 10,
       cooldownSeconds: 300,
+      riskProfile: DEFAULT_RISK_PROFILE,
     },
     versions: [v],
     activeVersion: v.id,
@@ -263,6 +289,16 @@ export function initialState(): State {
     preOpenNews: null,
     usage: [],
   };
+}
+// Arma el estado a partir de lo guardado. Un campo que no existía al guardarse
+// aparece con su valor inicial. Los ajustes se completan campo a campo porque son
+// un objeto dentro del estado: sin esto, un estado antiguo se quedaba sin nivel
+// de riesgo.
+export function restoreState(parts: Record<string, unknown>[]): State {
+  const base = initialState();
+  const s: State = Object.assign({}, base, ...parts);
+  s.settings = { ...base.settings, ...s.settings };
+  return s;
 }
 export function log(s: State, type: string, message: string) {
   s.events.unshift({ id: id(), at: now(), type, message });
@@ -364,10 +400,51 @@ export function watchProblem(
 }
 export const validWatch = (w: z.infer<typeof watchSchema>, s: State) =>
   watchProblem(w, s) === null;
+// Lo que dice Alpaca del activo en /v2/assets. El worker lo consulta justo antes
+// de enviar la orden. Al decidir no se tiene, y esa parte espera al envío.
+export type AssetInfo = {
+  tradable?: boolean;
+  status?: string;
+  shortable?: boolean;
+  easy_to_borrow?: boolean;
+};
+export function assetProblem(
+  asset: AssetInfo | null | undefined,
+  intent: OrderIntent | undefined,
+): string | null {
+  if (!asset?.tradable || asset.status !== "active")
+    return "Activo no negociable";
+  // Para vender en corto hay que pedir prestadas las acciones. Alpaca solo lo
+  // permite si el activo es shortable, y sin easy_to_borrow la orden se rechaza
+  // o el préstamo se puede reclamar en cualquier momento.
+  if (
+    (intent === "open_short" || intent === "add_short") &&
+    !(asset.shortable && asset.easy_to_borrow)
+  )
+    return "Alpaca no permite vender este activo en corto ahora";
+  return null;
+}
+const heldQty = (s: State, symbol: string | null) =>
+  Number(s.positions.find((x) => x.symbol === symbol)?.qty ?? 0);
+// La intención de una compra o venta con las posiciones de ahora. undefined si
+// es una espera, si faltan datos o si cruzaría de largo a corto o al revés.
+export function proposalIntent(
+  s: State,
+  p: z.infer<typeof proposalSchema>,
+): OrderIntent | undefined {
+  if (p.action === "wait" || !p.symbol || !p.qty) return undefined;
+  const held = heldQty(s, p.symbol);
+  if (!Number.isFinite(held)) return undefined;
+  const i = orderIntent(held, p.action, p.qty);
+  return i === "long_to_short" || i === "short_to_long" ? undefined : i;
+}
+// asset solo lo pasa quien acaba de consultar /v2/assets. Sin él no se mira si
+// el activo se puede negociar ni si admite cortos.
 export function orderGuard(
   s: State,
   p: z.infer<typeof proposalSchema>,
   t = Date.now(),
+  asset?: AssetInfo | null,
 ): string | null {
   if (s.paused) return "Agente pausado";
   if (!p.symbol || !s.settings.symbols.includes(p.symbol))
@@ -428,10 +505,15 @@ export function orderGuard(
   // día.
   if (open.some((o) => o.symbol === p.symbol))
     return "Ya hay una orden abierta de este activo";
-  // El dinero de las compras abiertas ya está comprometido aunque aún no se
-  // haya gastado.
+  // El dinero de las órdenes abiertas que aumentan la exposición ya está
+  // comprometido aunque aún no se haya gastado: una compra sin posición corta en
+  // ese activo, o una venta sin posición larga, que abre un corto. Una recompra o
+  // la venta de lo que se tiene reducen la exposición y no cuentan. Las órdenes
+  // de Alpaca siempre traen qty positiva y el lado aparte.
   const committed = open
-    .filter((o) => o.side === "buy")
+    .filter((o) =>
+      o.side === "buy" ? heldQty(s, o.symbol) >= 0 : heldQty(s, o.symbol) <= 0,
+    )
     .reduce(
       (a, o) =>
         a +
@@ -452,28 +534,61 @@ export function orderGuard(
     ).length >= s.settings.maxDailyOrders
   )
     return "Límite diario de órdenes";
+  if (p.action === "wait") return "Una espera no es una orden";
+  const profile = riskProfileOf(s.settings);
   const pos = s.positions.find((x) => x.symbol === p.symbol);
-  if (p.action === "sell") {
-    if (p.qty > Number(pos?.qty ?? 0))
-      return "No se permiten posiciones cortas";
-  } else {
-    if (
-      s.baseline &&
-      Number(s.account.equity) <
-        s.baseline * (1 - s.settings.maxDrawdownPct / 100)
-    )
-      return "Umbral de pérdida alcanzado";
-    if (value + committed > Number(s.account.cash)) return "Saldo insuficiente";
-    if (value + Number(pos?.market_value ?? 0) > s.settings.maxPositionUsd)
-      return "Límite por posición";
-    if (
-      s.positions.reduce((a, x) => a + Math.abs(Number(x.market_value)), 0) +
-        committed +
-        value >
-      s.settings.maxExposureUsd
-    )
-      return "Límite de exposición";
+  const held = Number(pos?.qty ?? 0);
+  const intent = orderIntent(held, p.action, p.qty);
+  // Una sola orden no cruza de largo a corto: si la venta de cierre se ejecuta
+  // a medias, no se sabría qué parte es venta y qué parte es corto. Sin cortos,
+  // vender más de lo que se tiene sigue diciendo lo de siempre.
+  if (intent === "long_to_short")
+    return profile.shorts
+      ? `No se puede pasar de largo a corto en una sola orden: vende primero las ${held} acciones`
+      : "No se permiten posiciones cortas";
+  if (intent === "short_to_long")
+    return `No se puede pasar de corto a largo en una sola orden: recompra primero las ${-held} acciones`;
+  if (intent === "open_short" || intent === "add_short") {
+    if (!profile.shorts) return "No se permiten posiciones cortas";
+    if (s.account.shorting_enabled === false)
+      return "La cuenta de Alpaca no tiene activadas las ventas en corto";
   }
+  if (asset !== undefined) {
+    const problema = assetProblem(asset, intent);
+    if (problema) return problema;
+  }
+  // Reducir o cerrar, sea largo o corto, no se frena por los límites de dinero ni
+  // por el umbral de pérdida: es lo que baja el riesgo. Una recompra se permite
+  // también en un nivel sin cortos, para poder deshacer los que quedaran.
+  if (!opensRisk(intent)) return null;
+  if (
+    s.baseline &&
+    Number(s.account.equity) <
+      s.baseline * (1 - s.settings.maxDrawdownPct / 100)
+  )
+    return "Umbral de pérdida alcanzado";
+  // Lo cobrado al vender en corto entra en el efectivo, pero se debe: no es
+  // dinero libre. Un corto pide el mismo efectivo libre que una compra del mismo
+  // valor, así que tampoco con cortos se opera con apalancamiento.
+  const owed = s.positions
+    .filter((x) => Number(x.qty) < 0)
+    .reduce((a, x) => a + Math.abs(Number(x.market_value)), 0);
+  if (value + committed > Number(s.account.cash) - owed)
+    return "Saldo insuficiente";
+  // Un corto cuenta igual que un largo del mismo valor: en Alpaca su valor de
+  // mercado es negativo, así que todo se mide en valor absoluto.
+  if (
+    value + Math.abs(Number(pos?.market_value ?? 0)) >
+    s.settings.maxPositionUsd
+  )
+    return "Límite por posición";
+  if (
+    s.positions.reduce((a, x) => a + Math.abs(Number(x.market_value)), 0) +
+      committed +
+      value >
+    s.settings.maxExposureUsd
+  )
+    return "Límite de exposición";
   return null;
 }
 // Expected conditions the owner can fix. The API answers 400 with the message.

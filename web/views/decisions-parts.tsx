@@ -1,39 +1,21 @@
 // Piezas compartidas por la lista de decisiones y su detalle.
 import React from "react";
-import {
-  CirclePlus,
-  CircleMinus,
-  CirclePause,
-  CircleCheck,
-  Clock,
-  CircleSlash,
-} from "lucide-react";
+import { CircleCheck, Clock, CircleSlash } from "lucide-react";
 import type { Decision } from "../../src/domain";
 import { money, date } from "../shared";
+import { decisionType } from "./decisions-intent";
 import "./decisions.css";
 
-export const actionText: Record<string, string> = {
-  buy: "Compra",
-  sell: "Venta",
-  wait: "Espera",
-};
-
-export function ActionIcon({
-  action,
-  size = 18,
-}: {
-  action: string;
-  size?: number;
-}) {
-  const Icon =
-    action === "buy"
-      ? CirclePlus
-      : action === "sell"
-        ? CircleMinus
-        : CirclePause;
+// Con intent el icono y el texto dicen si es un corto. El color sigue la
+// dirección del dinero: verde al comprar y rojo al vender.
+export function ActionIcon({ d, size = 18 }: { d: Decision; size?: number }) {
+  const t = decisionType(d);
   return (
-    <span className={"dc-icon " + action} aria-hidden="true">
-      <Icon size={size} strokeWidth={1.9} />
+    <span
+      className={"dc-icon " + t.side + (t.short ? " short" : "")}
+      aria-hidden="true"
+    >
+      <t.Icon size={size} strokeWidth={1.9} />
     </span>
   );
 }

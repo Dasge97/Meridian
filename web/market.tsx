@@ -46,6 +46,9 @@ function dayChange(s: State, symbol: string, price: number | null) {
     };
   return { value: null, label: "" };
 }
+// Alpaca da las posiciones cortas con unidades y valor negativos.
+const isShort = (x: { qty?: string; side?: string } | undefined) =>
+  Boolean(x && (x.side === "short" || Number(x.qty) < 0));
 const duration = (ms: number) => {
   const h = Math.floor(ms / 3600000),
     m = Math.floor((ms % 3600000) / 60000);
@@ -88,7 +91,9 @@ function Status({ s, symbol }: { s: State; symbol: string }) {
         <em>Precio</em>{" "}
         {s.stream === "connected"
           ? "en directo (IEX)"
-          : "sin conexión en directo"}
+          : marketOpen(s)
+            ? "sin conexión en directo"
+            : "último cierre"}
       </span>
       {d5 && (
         <span>
@@ -115,8 +120,9 @@ function Ticker(p: {
     watches = s.watches.filter(
       (w) => w.symbol === symbol && w.status === "active",
     ).length,
+    position = s.positions.find((x) => x.symbol === symbol),
     flags = [
-      s.positions.some((x) => x.symbol === symbol) && "posición",
+      position && (isShort(position) ? "posición corta" : "posición"),
       watches === 1 && "1 vigilancia",
       watches > 1 && `${watches} vigilancias`,
     ]
@@ -388,20 +394,36 @@ function Holdings({ s, symbol }: { s: State; symbol: string }) {
     watches = s.watches.filter(
       (w) => w.symbol === symbol && w.status === "active",
     ),
-    price = priceOf(s, symbol);
+    price = priceOf(s, symbol),
+    short = isShort(p);
   return (
     <section className="panel">
-      <h2>Posición y vigilancias</h2>
+      <div className="group-title mk-holding-title">
+        <h2>Posición y vigilancias</h2>
+        {short && <span className="badge mk-short">Corto</span>}
+      </div>
       {!p && !watches.length && (
         <p className="muted">
           Sin posición ni vigilancias activas en {symbol}.
         </p>
       )}
+      {short && (
+        <p className="mk-short-note">
+          Posición corta: vendió {Math.abs(Number(p.qty))} acciones que no
+          tenía. Gana si el precio baja y pierde si sube.
+        </p>
+      )}
       {p && (
         <div className="stats two">
-          <Stat label="Unidades" value={String(p.qty)} />
-          <Stat label="Precio de entrada" value={money(p.avg_entry_price)} />
-          <Stat label="Valor" value={money(p.market_value)} />
+          <Stat
+            label={short ? "Unidades en corto" : "Unidades"}
+            value={String(Math.abs(Number(p.qty)))}
+          />
+          <Stat
+            label={short ? "Precio de venta" : "Precio de entrada"}
+            value={money(p.avg_entry_price)}
+          />
+          <Stat label="Valor" value={money(Math.abs(Number(p.market_value)))} />
           <Stat label="Resultado no realizado" value={money(p.unrealized_pl)}>
             <Chip value={Number(p.unrealized_plpc) * 100} />
           </Stat>

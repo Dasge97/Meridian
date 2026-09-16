@@ -90,6 +90,31 @@ test(
         ).statusCode,
         400,
       );
+      // El nivel de riesgo se guarda con los límites, y un formulario que no lo
+      // envía no lo devuelve al de por defecto.
+      const { riskProfile: _nivel, ...limites } = (await read()).settings;
+      void _nivel;
+      const guardar = async (payload: Record<string, unknown>) =>
+        (
+          await app.inject({
+            method: "PUT",
+            url: "/api/settings",
+            headers,
+            payload,
+          })
+        ).statusCode;
+      assert.equal(
+        await guardar({ ...limites, riskProfile: "temerario" }),
+        400,
+      );
+      assert.equal(
+        await guardar({ ...limites, riskProfile: "aggressive" }),
+        200,
+      );
+      assert.equal((await read()).settings.riskProfile, "aggressive");
+      assert.equal(await guardar({ ...limites, maxDailyCalls: 60 }), 200);
+      assert.equal((await read()).settings.riskProfile, "aggressive");
+      assert.equal((await read()).settings.maxDailyCalls, 60);
       await app.inject({
         method: "POST",
         url: "/api/lessons",
