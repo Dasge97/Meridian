@@ -1,5 +1,4 @@
 import WebSocket from "ws";
-import { z } from "zod";
 import { describeFailure } from "./worker-failures.ts";
 import { pool, change, read } from "./db.ts";
 import {
@@ -10,14 +9,14 @@ import {
   intradayBars,
   marketNews,
 } from "./alpaca.ts";
-import { decide, review, modelConfigured } from "./model.ts";
 import {
-  log,
-  now,
-  lessonSchema,
-  limitPriceString,
-  type Quote,
-} from "./domain.ts";
+  decide,
+  review,
+  modelConfigured,
+  ModelFailure,
+  type Spent,
+} from "./model.ts";
+import { log, now, limitPriceString, type Quote } from "./domain.ts";
 import {
   analyse,
   intradaySummary,
@@ -316,33 +315,37 @@ async function modelStep() {
     claimJob(s, configured() && modelConfigured()),
   );
   if (!job) return;
+  // Lo gastado en una llamada que respondió bien pero no se llegó a guardar.
+  let unsaved: Spent | undefined;
   try {
     if (job.due) {
       const result = await review(job.state, job.due);
-      const parsed = z
-        .object({
-          text: z.string().min(10).max(6000),
-          lessons: z.array(lessonSchema).max(3),
-        })
-        .parse(result.value);
+      unsaved = result.spent;
       const aviso = await change((s) => {
-        const due = applyReview(s, job, parsed, result.tokens);
+        const due = applyReview(s, job, result.parsed, result.spent);
         return due ? reviewNotice(s, due) : null;
       });
+      unsaved = undefined;
       await notify(aviso);
       return;
     }
     const result = await decide(job.state, job.event!);
+    unsaved = result.spent;
     const avisos = await change((s) => {
       const d = applyDecision(s, job, result, sessionOpen(s));
       return [newsNotice(s, d), decisionNotice(s, d)];
     });
+    unsaved = undefined;
     for (const aviso of avisos) await notify(aviso);
   } catch (e) {
     // Sin el motivo concreto no hay forma de saber si falló el proveedor, si
-    // tardó demasiado o si la respuesta no cumplía el esquema.
-    const motivo = describeFailure(e);
-    await change((s) => failJob(s, job, motivo));
+    // tardó demasiado o si la respuesta no cumplía el esquema. El fallo del
+    // modelo lleva dentro lo que llegó a cobrar el proveedor.
+    const failure = e instanceof ModelFailure ? e : null;
+    const motivo = describeFailure(failure ? failure.original : e);
+    await change((s) =>
+      failJob(s, job, motivo, failure ? failure.spent : unsaved),
+    );
   }
 }
 // Enviar un aviso nunca puede impedir que el laboratorio siga funcionando: si

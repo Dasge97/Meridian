@@ -318,7 +318,7 @@ test("A review stores its text and adopts its lessons in a new version", () => {
         { title: "Título", body: "Cuerpo de la lección", source: target.id },
       ],
     },
-    42,
+    { tokens: 42 },
   );
   assert.equal(s.decisions[0].review!.price, 200);
   assert.equal(s.lessons[0].status, "accepted", "entra sola en la memoria");
@@ -610,4 +610,222 @@ test("The agent is told whether the market is open and when it reopens", () => {
     clock: null,
   });
   assert.equal(s.market.open, true);
+});
+// Consumo del modelo por llamada.
+const sections = {
+  instructions: 4000,
+  portfolio: 1500,
+  analysis: 3000,
+  intraday: 1000,
+  news: 800,
+  watches: 100,
+  lessons: 400,
+  decisions: 1200,
+};
+test("A decision stores what it spent, what caused it and the size of each part", () => {
+  const s = state();
+  s.queue = [];
+  applyMarket(s, {}, true, Date.now());
+  s.watches = [
+    {
+      id: "w1",
+      symbol: "AAPL",
+      operator: "lte",
+      price: 300,
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      reason: "Reevaluar si cae",
+      invalidateBelow: null,
+      invalidateAbove: null,
+      status: "active",
+      createdAt: now(),
+    },
+  ];
+  applyMarket(s, { AAPL: { price: 199, at: now() } }, true, Date.now());
+  const trabajo = claimJob(s, true)!;
+  const T = Date.parse("2026-09-15T14:00:00Z");
+  const d = applyDecision(
+    s,
+    trabajo,
+    {
+      input: {},
+      proposal: waiting(),
+      tokens: 12000,
+      spent: {
+        model: "modelo-prueba",
+        tokens: 12000,
+        promptTokens: 11000,
+        completionTokens: 1000,
+        cachedTokens: 8000,
+        sections,
+      },
+    },
+    true,
+    T,
+  );
+  assert.deepEqual(s.usage.at(-1), {
+    at: "2026-09-15T14:00:00.000Z",
+    tokens: 12000,
+    kind: "decision",
+    trigger: "watch",
+    event: "Vigilancia w1: Reevaluar si cae",
+    decisionId: d.id,
+    model: "modelo-prueba",
+    promptTokens: 11000,
+    completionTokens: 1000,
+    cachedTokens: 8000,
+    sections,
+    ok: true,
+  });
+});
+test("A long event is cut to 200 characters in the usage record", () => {
+  const s = state();
+  applyDecision(
+    s,
+    job(s, "x".repeat(500)),
+    {
+      input: {},
+      proposal: waiting(),
+      tokens: 5,
+    },
+    true,
+  );
+  assert.equal(s.usage.at(-1)!.event!.length, 200);
+  assert.equal(s.usage.at(-1)!.trigger, "other", "sin evento de cola");
+});
+test("A review stores its usage against the reviewed decision, even if it is gone", () => {
+  const s = state();
+  const target = decision(s, { status: "filled", orderId: "alpaca-1" });
+  s.decisions = [target];
+  const reviewJob: Job = {
+    meta: { id: id(), startedAt: now(), kind: "review", targetId: target.id },
+    state: structuredClone(s),
+    due: structuredClone(target),
+  };
+  const partes = { instructions: 900, reviewed: 20000, portfolio: 700 };
+  applyReview(
+    s,
+    reviewJob,
+    { text: "El proceso fue razonable pese al resultado.", lessons: [] },
+    {
+      tokens: 6000,
+      promptTokens: 5500,
+      completionTokens: 500,
+      sections: partes,
+    },
+  );
+  const u = s.usage.at(-1)!;
+  assert.equal(u.kind, "review");
+  assert.equal(u.trigger, "review");
+  assert.equal(u.decisionId, target.id);
+  assert.equal(u.event, undefined, "una revisión no la provoca un evento");
+  assert.deepEqual(u.sections, partes);
+  assert.equal(u.ok, true);
+  s.decisions = [];
+  applyReview(
+    s,
+    reviewJob,
+    { text: "El proceso fue razonable pese al resultado.", lessons: [] },
+    { tokens: 10 },
+  );
+  assert.equal(s.usage.length, 2, "los tokens se gastaron igual");
+});
+test("A failed call is recorded with the tokens it spent, or with zero", () => {
+  const s = state();
+  s.queue = [
+    { id: id(), reason: "Titular sobre Apple", at: now(), trigger: "news" },
+  ];
+  const primero = claimJob(s, true)!;
+  failJob(
+    s,
+    primero,
+    "el modelo agotó su límite de tokens antes de cerrar la respuesta",
+    {
+      model: "m",
+      tokens: 9000,
+      promptTokens: 1000,
+      completionTokens: 8000,
+      sections,
+    },
+  );
+  const u = s.usage.at(-1)!;
+  assert.equal(u.ok, false);
+  assert.equal(u.tokens, 9000);
+  assert.equal(u.completionTokens, 8000);
+  assert.equal(u.trigger, "news");
+  assert.equal(u.decisionId, undefined, "no llegó a crear decisión");
+  assert.match(u.error!, /agotó su límite/);
+  assert.equal(s.queue[0].trigger, "news", "el reintento conserva el origen");
+  s.lastDecision = null;
+  const segundo = claimJob(s, true)!;
+  failJob(s, segundo, "e".repeat(400));
+  const sinRespuesta = s.usage.at(-1)!;
+  assert.equal(sinRespuesta.tokens, 0);
+  assert.equal(sinRespuesta.ok, false);
+  assert.equal(sinRespuesta.error!.length, 300);
+  assert.equal(sinRespuesta.promptTokens, undefined);
+  const target = decision(s, { status: "filled", orderId: "a" });
+  const reviewJob: Job = {
+    meta: { id: id(), startedAt: now(), kind: "review", targetId: target.id },
+    state: structuredClone(s),
+    due: structuredClone(target),
+  };
+  failJob(s, reviewJob, "Modelo HTTP 500");
+  assert.equal(s.usage.at(-1)!.kind, "review");
+  assert.equal(s.usage.at(-1)!.decisionId, target.id);
+});
+test("Every place that queues an evaluation says what caused it", () => {
+  const T = Date.parse("2026-09-14T15:00:00Z");
+  const periodica = state();
+  periodica.market = {
+    open: true,
+    nextOpen: null,
+    nextClose: "2026-09-14T20:00:00Z",
+  };
+  queueSessionScan(periodica, T);
+  assert.equal(periodica.queue[0].trigger, "periodic");
+  const noticias = state();
+  applyNews(noticias, [rawStory("1")]);
+  assert.equal(noticias.queue[0].trigger, "news");
+  const apertura = closed(state(), 600);
+  applyNews(apertura, [rawStory("1")]);
+  closed(apertura, 20);
+  queueNewsBeforeOpen(apertura);
+  assert.equal(apertura.queue[0].trigger, "preopen");
+  const orden = state();
+  orden.decisions = [decision(orden, { id: "order-1", status: "new" })];
+  applySnapshot(orden, {
+    account: { equity: "9500", cash: "100", status: "ACTIVE" },
+    positions: [],
+    orders: [{ client_order_id: "order-1", id: "alpaca-1", status: "filled" }],
+    trades: null,
+    clock: { is_open: true },
+  });
+  assert.equal(orden.queue[0].trigger, "other");
+  // Un evento que ya esperaba en la cola antes de guardar el origen.
+  const antiguo = state();
+  antiguo.queue = [
+    {
+      id: id(),
+      reason: "Reevaluación solicitada por el propietario",
+      at: now(),
+    },
+  ];
+  const trabajo = claimJob(antiguo, true)!;
+  applyDecision(
+    antiguo,
+    trabajo,
+    { input: {}, proposal: waiting(), tokens: 1 },
+    true,
+  );
+  assert.equal(
+    antiguo.usage.at(-1)!.trigger,
+    "other",
+    "no se adivina por el texto",
+  );
+});
+test("Old usage records without detail survive pruning untouched", () => {
+  const s = state();
+  s.usage = [{ at: now(), tokens: 100 }];
+  prune(s);
+  assert.deepEqual(s.usage, [{ at: s.usage[0].at, tokens: 100 }]);
 });

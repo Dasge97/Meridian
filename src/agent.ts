@@ -7,14 +7,18 @@ import {
   watchState,
   orderGuard,
   EVENT_ATTEMPTS,
+  USAGE_EVENT_CHARS,
+  USAGE_ERROR_CHARS,
   adoptLessons,
   type State,
+  type Usage,
   type Decision,
   type Quote,
   type proposalSchema,
 } from "./domain.ts";
 import type { z } from "zod";
 import type { Analysis, Intraday } from "./market.ts";
+import type { Spent } from "./model.ts";
 import { mergeStories, summarise, pendingRefs } from "./news.ts";
 import {
   sessionOpen,
@@ -95,7 +99,8 @@ export function applySnapshot(s: State, x: Snapshot, t = Date.now()) {
       d.status = o.status;
       d.orderId = o.id;
       log(s, "order", `${d.proposal.symbol}: ${o.status}`);
-      if (o.status === "filled") enqueue(s, `Orden ejecutada: ${d.id}`);
+      if (o.status === "filled")
+        enqueue(s, `Orden ejecutada: ${d.id}`, "other");
     }
   }
 }
@@ -130,7 +135,8 @@ export function applyMarket(
     if (next !== w.status) {
       w.status = next;
       log(s, "watch", `${w.symbol}: vigilancia ${next}`);
-      if (next === "triggered") enqueue(s, `Vigilancia ${w.id}: ${w.reason}`);
+      if (next === "triggered")
+        enqueue(s, `Vigilancia ${w.id}: ${w.reason}`, "watch");
     }
   }
 }
@@ -215,10 +221,53 @@ export function claimJob(s: State, ready: boolean, t = Date.now()): Job | null {
     queued: due ? undefined : structuredClone(event),
   };
 }
+// Un registro de consumo por llamada, con lo que la provocó. El origen lo guarda
+// el propio evento al encolarse; uno que ya esperaba en la cola antes de existir
+// ese campo cuenta como "other".
+export function usageRecord(
+  job: Job,
+  spent: Spent | undefined,
+  t: number,
+  extra: Pick<Usage, "decisionId" | "ok" | "error">,
+): Usage {
+  const u: Usage = {
+    at: new Date(t).toISOString(),
+    tokens: spent?.tokens ?? 0,
+    kind: job.due ? "review" : "decision",
+    trigger: job.due ? "review" : (job.queued?.trigger ?? "other"),
+    event: job.due ? undefined : job.event?.slice(0, USAGE_EVENT_CHARS),
+    decisionId: extra.decisionId,
+    model: spent?.model,
+    promptTokens: spent?.promptTokens,
+    completionTokens: spent?.completionTokens,
+    cachedTokens: spent?.cachedTokens,
+    sections: spent?.sections,
+    ok: extra.ok,
+    error: extra.error?.slice(0, USAGE_ERROR_CHARS),
+  };
+  // Sin campos vacíos: el historial guarda miles de registros.
+  for (const k of Object.keys(u) as (keyof Usage)[])
+    if (u[k] === undefined) delete u[k];
+  return u;
+}
 // Una evaluación fallida gasta su llamada. El evento vuelve a la cola una vez:
 // si no, una respuesta mal formada perdía para siempre lo que la provocó.
-export function failJob(s: State, job: Job, motivo: string) {
+// spent trae lo que cobró el proveedor si llegó a responder.
+export function failJob(
+  s: State,
+  job: Job,
+  motivo: string,
+  spent?: Spent,
+  t = Date.now(),
+) {
   s.modelJob = null;
+  s.usage.push(
+    usageRecord(job, spent, t, {
+      decisionId: job.due?.id,
+      ok: false,
+      error: motivo,
+    }),
+  );
   const q = job.queued;
   const intentos = (q?.attempts ?? 0) + 1;
   const reintento = !job.due && q !== undefined && intentos < EVENT_ATTEMPTS;
@@ -242,6 +291,7 @@ export function applyDecision(
     input: unknown;
     proposal: z.infer<typeof proposalSchema>;
     tokens: number;
+    spent?: Spent;
   },
   marketOpen: boolean,
   t = Date.now(),
@@ -269,7 +319,12 @@ export function applyDecision(
     reviewAt: new Date(t + p.reviewAfterHours * 3600000).toISOString(),
   };
   s.decisions.push(d);
-  s.usage.push({ at: new Date(t).toISOString(), tokens: result.tokens });
+  s.usage.push(
+    usageRecord(job, result.spent ?? { tokens: result.tokens }, t, {
+      decisionId: d.id,
+      ok: true,
+    }),
+  );
   if (!obsolete && !s.paused)
     for (const w of p.watches)
       if (validWatch(w, s))
@@ -310,9 +365,13 @@ export function applyReview(
     text: string;
     lessons: { title: string; body: string; source: string }[];
   },
-  tokens: number,
+  spent: Spent,
   t = Date.now(),
 ) {
+  // Se registra aunque la decisión ya no exista: los tokens se gastaron igual.
+  s.usage.push(
+    usageRecord(job, spent, t, { decisionId: job.due!.id, ok: true }),
+  );
   const due = s.decisions.find((d) => d.id === job.due!.id);
   if (!due) {
     s.modelJob = null;
@@ -331,7 +390,6 @@ export function applyReview(
     `Lecciones de la revisión de ${due.proposal.action === "buy" ? "la compra" : "la venta"} de ${due.proposal.symbol ?? "un activo"}`,
     t,
   );
-  s.usage.push({ at: new Date(t).toISOString(), tokens });
   s.modelJob = null;
   log(s, "review", `Revisión completada: ${due.id}`);
   return due;
@@ -394,7 +452,7 @@ export function queueSessionScan(s: State, t = Date.now()) {
     t - Date.parse(s.lastDecision) < SCAN_EVERY_MINUTES * 60000
   )
     return false;
-  enqueue(s, SCAN_REASON);
+  enqueue(s, SCAN_REASON, "periodic");
   return true;
 }
 
@@ -419,7 +477,7 @@ export function applyNews(s: State, raw: unknown[], t = Date.now()) {
     summarise(fresh) +
       (despertar ? "" : ". Bolsa cerrada: se comentarán antes de la apertura."),
   );
-  if (!s.paused && despertar) enqueue(s, summarise(fresh));
+  if (!s.paused && despertar) enqueue(s, summarise(fresh), "news");
   return fresh.length;
 }
 export const NEWS_REVIEW_REASON = "Repaso de noticias pendientes de comentar";
@@ -441,6 +499,7 @@ export function queueNewsBeforeOpen(s: State, t = Date.now()) {
   enqueue(
     s,
     `${NEWS_REVIEW_REASON}: ${pendientes} ${pendientes === 1 ? "noticia llegada" : "noticias llegadas"} con la bolsa cerrada`,
+    "preopen",
   );
   return true;
 }

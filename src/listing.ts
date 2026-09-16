@@ -24,13 +24,13 @@ export type EventPage = Page<Event> & {
   types: { type: string; count: number }[];
 };
 
-type Common = {
+export type Paging = {
   page: number;
   size: number;
   from: number | null;
   to: number | null;
-  q: string;
 };
+type Common = Paging & { q: string };
 export type DecisionFilter = Common & {
   kind: DecisionKind;
   symbol: string | null;
@@ -64,13 +64,13 @@ export function paginate<T>(list: T[], page: number, size: number): Page<T> {
 
 // Lo más reciente primero por su fecha, sin fiarse del orden en que se guardó.
 // El orden es estable: con la misma fecha se respeta el guardado.
-const newestFirst = <T extends { at: string }>(list: T[]) =>
+export const newestFirst = <T extends { at: string }>(list: T[]) =>
   list
     .map((x, i) => ({ x, i, t: Date.parse(x.at) }))
     .sort((a, b) => b.t - a.t || a.i - b.i)
     .map((e) => e.x);
 
-const within = (at: string, f: Common) => {
+export const within = (at: string, f: Paging) => {
   const t = Date.parse(at);
   return (f.from === null || t >= f.from) && (f.to === null || t <= f.to);
 };
@@ -134,7 +134,7 @@ export function listEvents(events: Event[], f: EventFilter): EventPage {
 
 // Validación de la cadena de consulta. Cada fallo dice qué parámetro no vale.
 type Raw = Record<string, unknown>;
-function text(raw: Raw, key: string, label: string): string | null {
+export function text(raw: Raw, key: string, label: string): string | null {
   const v = raw[key];
   if (v === undefined || v === "") return null;
   if (typeof v !== "string")
@@ -165,15 +165,13 @@ function instant(raw: Raw, key: string, label: string) {
     );
   return t;
 }
-function common(query: unknown): Common & { raw: Raw } {
+// Página, tamaño y fechas: lo que comparten todas las listas.
+export function paging(query: unknown): Paging & { raw: Raw } {
   const raw = (query && typeof query === "object" ? query : {}) as Raw;
   const from = instant(raw, "from", "La fecha de inicio"),
     to = instant(raw, "to", "La fecha de fin");
   if (from !== null && to !== null && from > to)
     throw new UserError("La fecha de inicio es posterior a la de fin");
-  const q = (text(raw, "q", "La búsqueda") ?? "").trim();
-  if (q.length > 200)
-    throw new UserError("La búsqueda no puede pasar de 200 caracteres");
   return {
     raw,
     page: whole(raw, "page", "La página", 1, Infinity) ?? 1,
@@ -181,8 +179,14 @@ function common(query: unknown): Common & { raw: Raw } {
       whole(raw, "size", "El tamaño de página", 1, PAGE_SIZE_MAX) ?? PAGE_SIZE,
     from,
     to,
-    q,
   };
+}
+function common(query: unknown): Common & { raw: Raw } {
+  const w = paging(query);
+  const q = (text(w.raw, "q", "La búsqueda") ?? "").trim();
+  if (q.length > 200)
+    throw new UserError("La búsqueda no puede pasar de 200 caracteres");
+  return { ...w, q };
 }
 export function decisionFilter(query: unknown): DecisionFilter {
   const { raw, ...c } = common(query);

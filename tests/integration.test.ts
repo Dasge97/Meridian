@@ -144,7 +144,7 @@ test(
       assert.equal((await read()).watches.length, 1);
       await Promise.all(
         Array.from({ length: 10 }, (_, i) =>
-          change((s) => enqueue(s, `Concurrent ${i}`)),
+          change((s) => enqueue(s, `Concurrent ${i}`, "other")),
         ),
       );
       assert.equal((await read()).queue.length, 10);
@@ -236,6 +236,55 @@ test(
       assert.equal(
         events.types.reduce((a: number, t: any) => a + t.count, 0),
         events.total,
+      );
+      await change((s) => {
+        s.queue = [];
+      });
+      await app.inject({ method: "POST", url: "/api/wake", headers });
+      assert.equal(
+        (await read()).queue[0].trigger,
+        "manual",
+        "reevaluar desde el panel se registra como manual",
+      );
+      await change((s) => {
+        s.usage.push(
+          { at: "2026-09-10T10:00:00Z", tokens: 500 },
+          {
+            at: "2026-09-12T10:00:00Z",
+            tokens: 1100,
+            kind: "decision",
+            trigger: "manual",
+            promptTokens: 1000,
+            completionTokens: 100,
+            sections: { instructions: 1, portfolio: 1 },
+            ok: true,
+          },
+        );
+      });
+      const usage = (
+        await app.inject({ method: "GET", url: "/api/usage?size=1", headers })
+      ).json();
+      assert.deepEqual(Object.keys(usage).sort(), [
+        "items",
+        "page",
+        "size",
+        "summary",
+        "total",
+      ]);
+      assert.equal(usage.items.length, 1);
+      assert.deepEqual(usage.items[0].estimated, {
+        instructions: 500,
+        portfolio: 500,
+      });
+      assert.equal(usage.summary.calls, 2);
+      assert.equal(usage.summary.byDay.length, 3, "sin huecos entre días");
+      const slim = (
+        await app.inject({ method: "GET", url: "/api/state", headers })
+      ).json().usage;
+      assert.equal(
+        slim.at(-1).sections,
+        undefined,
+        "el estado no lleva el detalle de cada llamada",
       );
       const market = (
         await app.inject({ method: "GET", url: "/api/market", headers })

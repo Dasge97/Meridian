@@ -34,6 +34,7 @@ import {
   listDecisions,
   listEvents,
 } from "./listing.ts";
+import { listUsage, usageFilter } from "./usage.ts";
 const secret = process.env.SESSION_SECRET ?? "",
   password = process.env.ADMIN_PASSWORD ?? "",
   origin = process.env.APP_ORIGIN ?? "http://localhost:3000";
@@ -159,7 +160,17 @@ app.get("/api/state", async () => {
       .map((d) => ({ ...d, input: null })),
     events: s.events.slice(0, PANEL_EVENTS),
     equity: s.equity.slice(-PANEL_EQUITY),
-    usage: s.usage.slice(-PANEL_USAGE),
+    // Solo lo que cabe en una barra. El detalle de cada llamada va por
+    // /api/usage: con él, 200 registros pesarían en cada consulta de 5 segundos.
+    usage: s.usage
+      .slice(-PANEL_USAGE)
+      .map(({ at, tokens, kind, trigger, ok }) => ({
+        at,
+        tokens,
+        kind,
+        trigger,
+        ok,
+      })),
     totals: {
       decisions: s.decisions.length,
       events: s.events.length,
@@ -188,6 +199,11 @@ app.get("/api/events", async (req) => {
   const f = eventFilter(req.query);
   return listEvents((await read()).events, f);
 });
+// Consumo del modelo por llamada, con su resumen. Mismo estilo que las listas.
+app.get("/api/usage", async (req) => {
+  const f = usageFilter(req.query);
+  return listUsage((await read()).usage, f);
+});
 app.get("/api/decisions/:id", async (req, reply) => {
   const p = z.object({ id: z.uuid() }).parse(req.params);
   const d = (await read()).decisions.find((d) => d.id === p.id);
@@ -210,13 +226,17 @@ app.post("/api/pause", async (req) => {
     s.paused = paused;
     log(s, "control", paused ? "Agente pausado" : "Agente activado");
     if (!paused && !s.queue.length)
-      enqueue(s, "Inicio de observación solicitado por el propietario");
+      enqueue(
+        s,
+        "Inicio de observación solicitado por el propietario",
+        "manual",
+      );
   });
   return { ok: true };
 });
 app.post("/api/wake", async () => {
   await change((s) => {
-    enqueue(s, "Reevaluación solicitada por el propietario");
+    enqueue(s, "Reevaluación solicitada por el propietario", "manual");
     log(s, "control", "Reevaluación en cola");
   });
   return { ok: true };

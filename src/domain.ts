@@ -120,6 +120,48 @@ export type Decision = {
   // Comentarios ya emparejados con su noticia, para el panel y para el aviso.
   newsCommented?: { storyId: string; comment: string; matters: boolean }[];
 };
+export const USAGE_TRIGGERS = [
+  "watch",
+  "periodic",
+  "news",
+  "preopen",
+  "manual",
+  "review",
+  "other",
+] as const;
+export const USAGE_SECTIONS = [
+  "instructions",
+  "portfolio",
+  "analysis",
+  "intraday",
+  "news",
+  "watches",
+  "lessons",
+  "decisions",
+  "reviewed",
+] as const;
+export type UsageTrigger = (typeof USAGE_TRIGGERS)[number];
+export type UsageSection = (typeof USAGE_SECTIONS)[number];
+// Un registro por llamada al modelo. Los anteriores a este formato solo traen
+// at y tokens, así que todo lo demás es opcional.
+export type Usage = {
+  at: string;
+  tokens: number;
+  kind?: "decision" | "review";
+  trigger?: UsageTrigger;
+  event?: string;
+  decisionId?: string;
+  model?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedTokens?: number;
+  // Caracteres de cada parte de lo enviado. El proveedor solo da el total.
+  sections?: Partial<Record<UsageSection, number>>;
+  ok?: boolean;
+  error?: string;
+};
+export const USAGE_EVENT_CHARS = 200,
+  USAGE_ERROR_CHARS = 300;
 export type State = {
   paused: boolean;
   settings: Settings;
@@ -129,7 +171,14 @@ export type State = {
   lessons: Lesson[];
   decisions: Decision[];
   events: { id: string; at: string; type: string; message: string }[];
-  queue: { id: string; reason: string; at: string; attempts?: number }[];
+  // trigger dice quién encoló el evento, para saber en qué se gastan los tokens.
+  queue: {
+    id: string;
+    reason: string;
+    at: string;
+    attempts?: number;
+    trigger?: UsageTrigger;
+  }[];
   quotes: Record<string, Quote>;
   account: any;
   positions: any[];
@@ -149,7 +198,7 @@ export type State = {
   lastNotice: { at: string; kind: string } | null;
   // Sesión para la que ya se encoló el repaso de noticias pendientes.
   preOpenNews: string | null;
-  usage: { at: string; tokens: number }[];
+  usage: Usage[];
   modelJob?: {
     id: string;
     startedAt: string;
@@ -219,8 +268,9 @@ export function log(s: State, type: string, message: string) {
   s.events.unshift({ id: id(), at: now(), type, message });
   s.events = s.events.slice(0, 1000);
 }
-export function enqueue(s: State, reason: string) {
-  if (s.queue.length < 100) s.queue.push({ id: id(), reason, at: now() });
+export function enqueue(s: State, reason: string, trigger: UsageTrigger) {
+  if (s.queue.length < 100)
+    s.queue.push({ id: id(), reason, at: now(), trigger });
 }
 export const EVENT_ATTEMPTS = 2,
   MAX_ACTIVE_LESSONS = 15;
@@ -474,6 +524,9 @@ const _exhaustive: Hot & Cold extends State
     : never
   : never = true;
 void _exhaustive;
+// USAGE_KEPT: un registro de consumo con su detalle ocupa unos 600 bytes, 900 si
+// trae error. 2.000 son menos de 2 MB, poco al lado del contexto guardado de las
+// decisiones. Con 20 llamadas al día cubren más de tres meses.
 export const EQUITY_FULL_DAYS = 3,
   EQUITY_OLD_POINTS = 3000,
   DECISIONS_KEPT = 2000,

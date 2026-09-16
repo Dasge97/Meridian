@@ -22,6 +22,8 @@ test("HTTP security: login, signed cookies, route protection, Origin and static 
       "/api/decisions?page=2&kind=buy",
       "/api/events",
       "/api/events?q=orden",
+      "/api/usage",
+      "/api/usage?kind=review&trigger=unknown",
     ])
       assert.equal(
         (await app.inject({ method: "GET", url })).statusCode,
@@ -99,6 +101,13 @@ test("HTTP security: login, signed cookies, route protection, Origin and static 
       ["/api/decisions?size=101", /tamaño de página/],
       ["/api/decisions?kind=todas", /tipo/],
       ["/api/events?from=ayer", /fecha de inicio/],
+      ["/api/usage?size=0", /tamaño de página/],
+      ["/api/usage?kind=wait", /El tipo tiene que ser uno de estos/],
+      ["/api/usage?trigger=vigilancia", /El origen tiene que ser uno de estos/],
+      [
+        "/api/usage?from=2026-09-15T00:00:00Z&to=2026-09-14T00:00:00Z",
+        /posterior/,
+      ],
     ] as const) {
       const r = await app.inject({ method: "GET", url, headers });
       assert.equal(r.statusCode, 400, url);

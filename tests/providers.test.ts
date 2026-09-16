@@ -6,7 +6,7 @@ import {
   AlpacaError,
   AlpacaUnavailable,
 } from "../src/alpaca.ts";
-import { decide } from "../src/model.ts";
+import { decide, review, ModelFailure } from "../src/model.ts";
 import { initialState, proposalSchema } from "../src/domain.ts";
 import { describeFailure } from "../src/worker-failures.ts";
 import { analyse } from "../src/market.ts";
@@ -209,4 +209,184 @@ test("Failures are described so the log says what actually went wrong", () => {
   timeout.name = "TimeoutError";
   assert.match(describeFailure(timeout), /no respondió a tiempo/);
   assert.equal(describeFailure("x".repeat(500)).length, 300);
+});
+test("A model call reports what it spent and how big each part of the context was", async () => {
+  process.env.LLM_API_KEY = "test-key";
+  process.env.LLM_MODEL = "test-model";
+  const original = globalThis.fetch;
+  const answer = (content: unknown, extra: Record<string, unknown> = {}) =>
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(content) }, ...extra }],
+        usage: {
+          prompt_tokens: 9000,
+          completion_tokens: 300,
+          total_tokens: 9300,
+          prompt_tokens_details: { cached_tokens: 4000 },
+        },
+      }),
+    );
+  const wait = {
+    action: "wait",
+    symbol: null,
+    qty: null,
+    limitPrice: null,
+    reason: "No hay evidencia suficiente",
+    hypothesis: "Esperar una cotización reciente",
+    reviewAfterHours: 24,
+    notify: false,
+    note: "Sin novedad que contar al propietario",
+    watches: [],
+  };
+  try {
+    let sent: any;
+    globalThis.fetch = async (_url, opts) => {
+      sent = JSON.parse(String(opts?.body));
+      return answer(wait);
+    };
+    const s = initialState();
+    const result = await decide(s, "Revisión periódica del mercado");
+    const context = JSON.parse(sent.messages[1].content);
+    const { sections, ...spent } = result.spent;
+    assert.deepEqual(spent, {
+      model: "test-model",
+      tokens: 9300,
+      promptTokens: 9000,
+      completionTokens: 300,
+      cachedTokens: 4000,
+    });
+    assert.deepEqual(Object.keys(sections!).sort(), [
+      "analysis",
+      "decisions",
+      "instructions",
+      "intraday",
+      "lessons",
+      "news",
+      "portfolio",
+      "watches",
+    ]);
+    assert.equal(sections!.instructions, sent.messages[0].content.length);
+    assert.equal(
+      sections!.analysis,
+      JSON.stringify({ analysis: context.analysis }).length,
+    );
+    assert.equal(
+      sections!.lessons,
+      JSON.stringify({
+        lessons: context.lessons,
+        lessonsOmitted: context.lessonsOmitted,
+      }).length,
+    );
+    const { event, at, settings, clock, account, positions, quotes } = context;
+    assert.equal(
+      sections!.portfolio,
+      JSON.stringify({ event, at, settings, clock, account, positions, quotes })
+        .length,
+    );
+
+    s.decisions = [
+      {
+        id: "d1",
+        at: new Date().toISOString(),
+        versionId: s.activeVersion,
+        event: "evento",
+        input: { news: [{ headline: "no llega a la revisión" }] },
+        proposal: proposalSchema.parse({ ...wait, action: "wait" }),
+        status: "filled",
+        reviewAt: new Date().toISOString(),
+      },
+    ];
+    globalThis.fetch = async (_url, opts) => {
+      sent = JSON.parse(String(opts?.body));
+      return answer({ text: "Evaluación suficientemente larga", lessons: [] });
+    };
+    const revision = await review(s, s.decisions[0]);
+    assert.equal(revision.parsed.text, "Evaluación suficientemente larga");
+    assert.equal(revision.tokens, 9300);
+    const rc = JSON.parse(sent.messages[1].content);
+    assert.deepEqual(revision.spent.sections, {
+      instructions: sent.messages[0].content.length,
+      reviewed: JSON.stringify({ decision: rc.decision }).length,
+      portfolio: JSON.stringify({
+        currentQuotes: rc.currentQuotes,
+        currentPositions: rc.currentPositions,
+        orders: rc.orders,
+      }).length,
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("A failed model call still carries what the provider charged", async () => {
+  process.env.LLM_API_KEY = "test-key";
+  process.env.LLM_MODEL = "test-model";
+  const original = globalThis.fetch;
+  const usage = {
+    prompt_tokens: 9000,
+    completion_tokens: 8000,
+    total_tokens: 17000,
+  };
+  const failure = (call: () => Promise<unknown>) =>
+    call().then(
+      () => assert.fail("tenía que fallar"),
+      (e: unknown) => {
+        assert.ok(e instanceof ModelFailure, String(e));
+        return e;
+      },
+    );
+  try {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ finish_reason: "length", message: { content: '{"a' } }],
+          usage,
+        }),
+      );
+    const cortada = await failure(() => decide(initialState(), "test"));
+    assert.equal(cortada.spent.tokens, 17000);
+    assert.equal(cortada.spent.completionTokens, 8000);
+    assert.ok(cortada.spent.sections!.instructions! > 0);
+    assert.match(describeFailure(cortada.original), /agotó su límite/);
+
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "no es json" } }],
+          usage,
+        }),
+      );
+    const noJson = await failure(() => decide(initialState(), "test"));
+    assert.equal(noJson.spent.tokens, 17000);
+    assert.ok(noJson.original instanceof SyntaxError);
+
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '{"action":"execute_shell"}' } }],
+          usage,
+        }),
+      );
+    const esquema = await failure(() => decide(initialState(), "test"));
+    assert.equal(esquema.spent.promptTokens, 9000);
+    assert.match(describeFailure(esquema.original), /no cumple el esquema/);
+
+    globalThis.fetch = async () => new Response("{}", { status: 500 });
+    const http = await failure(() => decide(initialState(), "test"));
+    assert.equal(http.spent.tokens, 0, "sin respuesta no hay tokens");
+    assert.equal(http.spent.promptTokens, undefined);
+    assert.equal(http.spent.model, "test-model");
+    assert.ok(http.spent.sections, "lo que se intentó enviar sí se sabe");
+    assert.match(http.message, /HTTP 500/);
+
+    globalThis.fetch = async () => {
+      const e = new Error("The operation was aborted");
+      e.name = "TimeoutError";
+      throw e;
+    };
+    const tarde = await failure(() => decide(initialState(), "test"));
+    assert.equal(tarde.spent.tokens, 0);
+    assert.match(describeFailure(tarde.original), /no respondió en 45 s/);
+  } finally {
+    globalThis.fetch = original;
+  }
 });

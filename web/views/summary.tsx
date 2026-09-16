@@ -444,7 +444,7 @@ function Activity({ s }: { s: Data }) {
   );
 }
 
-function Usage({ s }: { s: Data }) {
+function Usage({ s, goTo }: { s: Data; goTo: (tab: string) => void }) {
   const rows = s.usage.slice(-48),
     since = Date.now() - 24 * 3600000,
     day = s.usage.filter((u) => Date.parse(u.at) >= since),
@@ -508,6 +508,11 @@ function Usage({ s }: { s: Data }) {
           </div>
         </>
       )}
+      <p className="us-more">
+        <button type="button" className="link" onClick={() => goTo("Uso")}>
+          Ver uso
+        </button>
+      </p>
     </section>
   );
 }
@@ -534,7 +539,7 @@ export function Summary(p: ViewProps) {
       <Positions s={s} />
       <div className="sm-bottom">
         <Activity s={s} />
-        <Usage s={s} />
+        <Usage s={s} goTo={p.goTo} />
       </div>
     </div>
   );

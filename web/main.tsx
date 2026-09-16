@@ -9,6 +9,7 @@ import {
   ListChecks,
   Crosshair,
   BookOpen,
+  Gauge,
   Settings,
   RefreshCw,
   Play,
@@ -33,6 +34,7 @@ import { Decisions } from "./views/decisions";
 import { Watches } from "./views/watches";
 import { Learning } from "./views/learning";
 import { SettingsView } from "./views/settings";
+import { Usage } from "./views/usage";
 import { DecisionDetail } from "./views/decision-detail";
 import "./style.css";
 const TABS = [
@@ -65,6 +67,12 @@ const TABS = [
     icon: BookOpen,
     title: "Aprendizaje",
     text: "Lecciones que salen de revisar sus operaciones.",
+  },
+  {
+    name: "Uso",
+    icon: Gauge,
+    title: "Uso",
+    text: "Cuántos tokens gasta el modelo y en qué.",
   },
   {
     name: "Configuración",
@@ -529,6 +537,7 @@ function App() {
           {tab === "Decisiones" && <Decisions {...view} />}
           {tab === "Vigilancias" && <Watches {...view} />}
           {tab === "Aprendizaje" && <Learning {...view} />}
+          {tab === "Uso" && <Usage {...view} />}
           {tab === "Configuración" && <SettingsView {...view} />}
           <footer>
             MERIDIAN <span>Laboratorio personal de agentes · v0.1</span>
