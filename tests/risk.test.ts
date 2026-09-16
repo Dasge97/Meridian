@@ -10,6 +10,7 @@ import {
   orderIntent,
   riskProfileOf,
   buyRoomUsd,
+  fittedBuyQty,
   groupOf,
   knownIntent,
   intentLabel,
@@ -165,8 +166,18 @@ test("Each level adds its own concrete block of instructions", () => {
   assert.match(texto("aggressive"), /last está por encima de vwap/);
   assert.match(texto("aggressive"), /risk.maxPositionsPerGroup/);
   assert.match(texto("aggressive"), /vender la posición más floja/);
-  for (const level of LEVELS)
+  for (const level of LEVELS) {
     assert.match(texto(level), /risk.buyRoomUsd dice, por activo/);
+    assert.match(
+      texto(level),
+      /dividida por tu limitPrice, no por el último precio/,
+    );
+    assert.doesNotMatch(texto(level), /al menos 1./);
+  }
+  assert.match(
+    texto("aggressive"),
+    /Si un grupo tiene más de risk.maxPositionsPerGroup/,
+  );
   assert.match(
     texto("active"),
     /\(5\) Nada cumple las condiciones de tu nivel/,
@@ -751,4 +762,92 @@ test("The agent is told how much it can still buy of each symbol", () => {
   const vacia = state("aggressive");
   vacia.account = null as any;
   assert.equal(buyRoomUsd(vacia, "AAPL"), 0);
+});
+
+test("A group already over the cap cannot grow, but can be sold down", () => {
+  const s = state("aggressive");
+  s.settings.symbols = ["AAPL", "META", "GOOGL"];
+  s.account.cash = "100000";
+  for (const x of ["META", "GOOGL"]) s.quotes[x] = { price: 200, at: now() };
+  s.positions = ["AAPL", "META", "GOOGL"].map((symbol) => ({
+    symbol,
+    qty: "1",
+    market_value: "200",
+  }));
+  s.orders = [];
+  const op = (action: string, symbol: string) =>
+    proposal({ action, symbol, qty: 1, limitPrice: 200 });
+  assert.equal(
+    orderGuard(s, op("buy", "AAPL")),
+    "Demasiadas posiciones del mismo grupo",
+  );
+  assert.equal(orderGuard(s, op("sell", "GOOGL")), null);
+  // Con dos ya se puede volver a ampliar.
+  s.positions.pop();
+  assert.equal(orderGuard(s, op("buy", "AAPL")), null);
+  const b = state("balanced");
+  Object.assign(b, {
+    positions: s.positions.concat({
+      symbol: "GOOGL",
+      qty: "1",
+      market_value: "200",
+    }),
+  });
+  b.account.cash = "100000";
+  assert.equal(
+    orderGuard(b, op("buy", "AAPL")),
+    null,
+    "Equilibrado no tiene tope",
+  );
+});
+
+test("A buy slightly over the limits is sent with fewer shares", () => {
+  // El caso del 16/09/2026: 88 XLF a 56,85 son 5.002,80 con maxOrderUsd 5.000.
+  const s = state("aggressive");
+  s.settings.symbols = ["XLF"];
+  s.settings.maxOrderUsd = 5000;
+  s.settings.maxPositionUsd = 15000;
+  s.settings.maxExposureUsd = 90000;
+  s.account.cash = "37000";
+  s.quotes.XLF = { price: 56.64, at: now() };
+  const xlf = (qty: number) =>
+    proposal({ action: "buy", symbol: "XLF", qty, limitPrice: 56.85 });
+  assert.equal(orderGuard(s, xlf(88)), "Límite por orden");
+  assert.equal(fittedBuyQty(s, xlf(88)), 87);
+  assert.equal(fittedBuyQty(s, xlf(87)), null, "ya cabe");
+  assert.equal(fittedBuyQty(s, xlf(200)), null, "con menos de la mitad no");
+  assert.equal(
+    fittedBuyQty(
+      s,
+      proposal({ action: "sell", symbol: "XLF", qty: 88, limitPrice: 56.85 }),
+    ),
+    null,
+  );
+  const d = applyDecision(
+    s,
+    job(s),
+    { input: {}, proposal: xlf(88), tokens: 1 },
+    true,
+  );
+  assert.equal(d.status, "pending");
+  assert.equal(d.error, undefined);
+  assert.equal(d.proposal.qty, 87);
+  assert.deepEqual(d.qtyAdjusted, { from: 88, to: 87 });
+  assert.ok(s.events.some((e) => /se envía con 87/.test(e.message)));
+  // Si no cabe ni una acción, se bloquea como antes.
+  const n = state("aggressive");
+  n.settings.maxPositionUsd = 15000;
+  n.positions = [{ symbol: "AAPL", qty: "69", market_value: "14834" }];
+  const nvda = applyDecision(
+    n,
+    job(n),
+    {
+      input: {},
+      proposal: proposal({ action: "buy", qty: 1, limitPrice: 200 }),
+      tokens: 1,
+    },
+    true,
+  );
+  assert.equal(nvda.status, "blocked");
+  assert.equal(nvda.qtyAdjusted, undefined);
 });

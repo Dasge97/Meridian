@@ -337,6 +337,10 @@ function Palette(p: {
     </Command.Dialog>
   );
 }
+// Aviso de un refresco fallido. El siguiente que funciona lo quita: tras un
+// despliegue la API vuelve en unos segundos y el aviso se quedaba puesto.
+const SIN_CONEXION =
+  "Sin conexión con el servidor. Los datos pueden estar desactualizados.";
 function App() {
   const [data, setData] = useState<Data | null>(null),
     [auth, setAuth] = useState<boolean | null>(null),
@@ -363,6 +367,7 @@ function App() {
     if (d.sim !== simRef.current) return;
     setData(d);
     setAuth(true);
+    setError((e) => (e === SIN_CONEXION ? "" : e));
   }
   function chooseSim(next: SimId) {
     if (next === simRef.current) return;
@@ -393,12 +398,7 @@ function App() {
   useEffect(() => {
     refresh().catch((e) => setError(e.message));
     const t = setInterval(
-      () =>
-        refresh().catch(() =>
-          setError(
-            "Sin conexión con el servidor. Los datos pueden estar desactualizados.",
-          ),
-        ),
+      () => refresh().catch(() => setError(SIN_CONEXION)),
       5000,
     );
     return () => clearInterval(t);

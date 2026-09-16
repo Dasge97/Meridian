@@ -144,6 +144,9 @@ export type Decision = {
   // de cuando había ventas en corto pueden traer una intención que ya no existe:
   // quien la lea pasa por knownIntent.
   intent?: OrderIntent;
+  // Cantidad que propuso el modelo si el sistema la bajó para que la compra
+  // cupiera en los límites. proposal.qty ya es la que se envía.
+  qtyAdjusted?: { from: number; to: number };
 };
 export const USAGE_TRIGGERS = [
   "watch",
@@ -574,6 +577,20 @@ export function buyRoomUsd(s: State, symbol: string) {
   );
   return Number.isFinite(room) ? Math.max(0, Math.floor(room)) : 0;
 }
+// Cantidad con la que una compra que se pasa de los límites sí cabe, o null si
+// no hay que tocarla o no se puede. El 16/09/2026 el agente propuso 88 XLF a
+// 56,85 (5.002,80 USD) con maxOrderUsd 5.000: dividió por el último precio y no
+// por su límite, y la orden se bloqueó por 2,80 USD. Solo recorta si queda al
+// menos la mitad de lo propuesto: con menos ya no es la misma operación.
+export function fittedBuyQty(
+  s: State,
+  p: z.infer<typeof proposalSchema>,
+): number | null {
+  if (p.action !== "buy" || !p.symbol || !p.qty || !p.limitPrice) return null;
+  const max = Math.floor(buyRoomUsd(s, p.symbol) / p.limitPrice);
+  if (max >= p.qty) return null;
+  return max >= 1 && max * 2 >= p.qty ? max : null;
+}
 export function orderGuard(
   s: State,
   p: z.infer<typeof proposalSchema>,
@@ -661,8 +678,8 @@ export function orderGuard(
   // Reducir o cerrar no se frena por los límites de dinero ni por el umbral de
   // pérdida: es lo que baja el riesgo.
   if (!opensRisk(intent)) return null;
+  // Abrir una tercera del grupo, o ampliar una de un grupo que ya pasa del tope.
   if (
-    intent === "open_long" &&
     limitsGroups(riskProfileOf(s.settings).key) &&
     groupSymbols(s, p.symbol).length >= MAX_POSITIONS_PER_GROUP
   )

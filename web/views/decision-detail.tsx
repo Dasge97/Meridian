@@ -177,6 +177,13 @@ export function DecisionDetail(p: {
           </div>
         )}
 
+        {d.qtyAdjusted && (
+          <p className="muted" role="note">
+            El agente propuso {d.qtyAdjusted.from} acciones, que no cabían en
+            los límites. Se enviaron {d.qtyAdjusted.to}.
+          </p>
+        )}
+
         {d.error && (
           <div className="error dc-error" role="note">
             <strong>

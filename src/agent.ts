@@ -6,6 +6,7 @@ import {
   validWatch,
   watchState,
   orderGuard,
+  fittedBuyQty,
   EVENT_ATTEMPTS,
   REVIEW_ATTEMPTS,
   USAGE_EVENT_CHARS,
@@ -457,7 +458,7 @@ export function applyDecision(
   marketOpen: boolean,
   t = Date.now(),
 ) {
-  const p = result.proposal;
+  let p = result.proposal;
   const obsolete =
     s.activeVersion !== job.state.activeVersion ||
     JSON.stringify(s.settings) !== JSON.stringify(job.state.settings);
@@ -468,6 +469,15 @@ export function applyDecision(
       : !marketOpen
         ? "Mercado cerrado"
         : orderGuard(s, p, t);
+  // Una compra que se pasa de los límites por poco se envía con menos acciones
+  // en lugar de bloquearse, si con esa cantidad pasa todas las comprobaciones.
+  let qtyAdjusted: Decision["qtyAdjusted"];
+  const qty = error && !obsolete && marketOpen ? fittedBuyQty(s, p) : null;
+  if (qty !== null && !orderGuard(s, { ...p, qty }, t)) {
+    qtyAdjusted = { from: p.qty!, to: qty };
+    p = { ...p, qty };
+    error = null;
+  }
   const d: Decision = {
     id: id(),
     at: new Date(t).toISOString(),
@@ -479,6 +489,14 @@ export function applyDecision(
     error: error ?? undefined,
     reviewAt: new Date(t + p.reviewAfterHours * 3600000).toISOString(),
   };
+  if (qtyAdjusted) {
+    d.qtyAdjusted = qtyAdjusted;
+    log(
+      s,
+      "order",
+      `${p.symbol}: la compra de ${qtyAdjusted.from} acciones no cabía en los límites y se envía con ${qtyAdjusted.to}`,
+    );
+  }
   // Con las posiciones de ahora, no con las que vio el modelo: es lo que se
   // enviaría. Queda sin intención si vende más de lo que se tiene.
   const intent = proposalIntent(s, p);
